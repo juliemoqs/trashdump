@@ -1,8 +1,20 @@
 
+'''
+NOTE: This module was not written by me. All credit goes to petigura. 
+This module is taken from https://github.com/petigura/FFA/blob/master/FFA/FFA.py
+
+For the full package, see: https://github.com/petigura/FFA
+
+'''
+
+
+
 from __future__ import division, print_function
 
 import numpy as np
 from numpy import ma
+
+
 
 
 def FFA(XW):
