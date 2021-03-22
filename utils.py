@@ -320,8 +320,6 @@ def fill_all_gaps_AR(x, y, gap_size=3, cadence=1):
 
 
 
-
-
 def pad_time_series(x, y, min_dif=0.021,cadence=0.02043361, in_mode='reflect', pad_end=False, fill_gaps=True, constant_val=0., len_pad=None):
 
     padded_y = y
@@ -374,7 +372,7 @@ def pad_time_series(x, y, min_dif=0.021,cadence=0.02043361, in_mode='reflect', p
                 else:
                     y_add.extend( y_negative[range(j-n_left,j)][::-1]  )
 
-                if j+n_right >= len(y):
+                if j+n_right > len(y):
                     y_repeat_end = np.concatenate( [ y,y_negative[::-1] ]  )
                     y_add.extend(  y_repeat_end[range(j,j+n_right)][::-1] )
                 else:
@@ -436,7 +434,7 @@ def get_transit_depth_ppm(rp, rs):
     return 84. * rp**2. / rs**2.
 
 
-def get_transit_signal(width, depth, limb_dark=[0.4012, 0.5318, -0.2411,0.0194], exp_time=0.020417, pad=65536, b=0.35):
+def get_transit_signal(width, depth, limb_dark=[0.4012, 0.5318, -0.2411,0.0194], exp_time=0.020417, pad=65536, b=0.15):
 
     i = np.arccos(b/50.)*(180./np.pi)
 

@@ -4,7 +4,7 @@ from .utils import *
 from .transit_search import *
 import wotan
 import warnings
-from .oxjc import KData, JumpFinder, JumpClassifier, correct_jumps
+
 
 # Object to read in single Quarter light curve files from Kepler
 class single_quarter_lc(object):    
@@ -452,25 +452,6 @@ class KepData( object ):
 
 
 
-    def fix_jumps(self, i):
-
-
-        lc = self.lightcurves[i]
-
-        jc_kdata = KData(cadence = lc.cadenceno, time = lc.time, flux=lc.sap, quality=lc.quality)
-        
-        jf = JumpFinder(jc_kdata,)
-        jumps = jf.find_jumps()
-        jc = JumpClassifier(jc_kdata, jf.hp)
-        jc.classify(jumps)
-
-        cdata = correct_jumps(jc_kdata, jumps)
-
-        self.lightcurves[i].sap = cdata._flux
-        
-        return cdata
-
-
 
 
     def make_LightCurve(self, cotrend=True):
@@ -525,7 +506,6 @@ class KepData( object ):
                 corr_flux, corr_flux_err = lc.pdcsap, lc.sap_err/lc.sap
 
             else:
-                self.fix_jumps(i)
                 print('Cotrending Quarter {}......'.format(self.quarters[i]) )
                 corr_flux, corr_flux_err = self.cbv_correct_lc(i, propagate_errors=True)
             
