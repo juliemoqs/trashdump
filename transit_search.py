@@ -12,8 +12,10 @@ from .lightcurves import *
 from .utils import *
 from tqdm import tqdm
 
+filepath = path.abspath(__file__)
+dir_path = path.dirname(filepath)
 
-TRASH_DATA_DIR = '/Users/robby/Desktop/Research/subgiants/trash_code/'
+TRASH_DATA_DIR = dir_path+'/'
 
 
 class Dump(object):
