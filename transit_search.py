@@ -22,7 +22,6 @@ class Dump(object):
 
     def __init__(self, LightCurve, tdurs=None, star_logg=None, star_teff=None,
                  star_density=None, min_transits=3.):
-
         
         self.lc = LightCurve
 
@@ -36,7 +35,6 @@ class Dump(object):
         self.star_logg = star_logg
         self.star_teff = star_teff
         self.star_density = star_density
-
 
         if tdurs is None:
             self.tdurs = self._calc_best_tdurs(n_trans=min_transits)
@@ -108,7 +106,7 @@ class Dump(object):
         return limb_dark
 
 
-    def get_transit_model(self, depth, width, pad=None, b=0.1):
+    def get_transit_model(self, depth, width, pad=None, b=0.15):
 
         if pad is None:
             pad = len(self.lc.flux)*2
@@ -132,7 +130,7 @@ class Dump(object):
     
     
 
-    def Calculate_SES(self, mask=None, var_calc='mad',fill_mode='reflect',tdurs=None, ses_weights=None, window_width=9.):
+    def Calculate_SES(self, mask=None, var_calc='mad',fill_mode='reflect',tdurs=None, ses_weights=None, window_width=9., tdepth=84.):
 
         if mask is None:
             mask = self.lc.mask.copy()
@@ -145,10 +143,8 @@ class Dump(object):
         pad_time, pad_flux, pad_array =  pad_time_series(gap_time, gap_flux,
                                     pad_end=True, fill_gaps=False)
 
-        
         FluxTransform = ocwt( pad_flux-1., )
         FluxTransform = FluxTransform[:, pad_array]
-
 
         if tdurs is None:
             dur_iter = self.tdurs
@@ -163,7 +159,7 @@ class Dump(object):
 
             #print( 'Calculating SES for duration = {:.2f} days'.format(dur) )
             
-            Signal = self.get_transit_model(depth=500.,width=dur, pad=len(pad_array)  )
+            Signal = self.get_transit_model(depth=tdepth,width=dur, pad=len(pad_array)  )
             SignalTransform = ocwt(Signal)
 
             ses, num, den, sig2 = calculate_SES(FluxTransform, SignalTransform,
@@ -283,15 +279,12 @@ class Dump(object):
 
             dur = self.tdurs[i_dur]
             
-            print('KIC {1}: Searching tdur = {0:.3f}'.format(dur,self.lc.ID) )
+            print('Star {1}: Searching tdur = {0:.3f}'.format(dur,self.lc.ID) )
 
             ses_i = self.ses[i_dur].copy()
             num_i = self.num[i_dur].copy()
             den_i = self.den[i_dur].copy()
             
-            #ses_i, num_i, den_i = self.Calculate_SES(mask=ses_mask,
-            #                                             fill_mode='reflect', 
-            #                                             tdurs=[dur])
     
             P_min = max(365. * (dur * 24./13.)**3. * (1.) * dur_range[0]**3.,  dur*8.)
             P_max = min(365. * (dur * 24./13.)**3. * (1.) * dur_range[1]**3.,  max(self.search_periods) )
@@ -309,21 +302,12 @@ class Dump(object):
                                                       tolerance=0.0001)
                 for tce in tces_noharm:
             
-                    tce_per, tce_mes, tce_t0, tce_width = find_best_params_for_TCE(time=masktime, num=num, den=den, tdurs=self.tdurs, P=tce[1], texp=self.lc.exptime,)
+                    tce_per, tce_mes, tce_t0, tce_width = find_best_params_for_TCE(time=masktime, num=num, den=den,t0=tce[3], tdurs=self.tdurs, P=tce[1], texp=self.lc.exptime,)
 
 
                     TCE_append = [tce[0], tce_per, tce_mes, tce_t0, tce_width]
                     all_tces = pd.concat([all_tces, pd.DataFrame([TCE_append],columns=['star_id','period','mes','t0_bkjd','tdur'])])
 
-              #  if len(all_tces.to_numpy()) > 1:
-              #      all_tces = remove_TCE_harmonics(all_tces.to_numpy(), known_TCEs=None,
-              #                                  tolerance=0.0005)
-              #      all_tces = pd.DataFrame(all_tces, columns=['star_id','period','mes','t0_bkjd','tdur'])
-              #  else:
-              #      continue
-        
-
-            #all_tces = all_tces.loc[all_tces['period']>5. * all_tces['tdur'] ]
 
         tces_noharm = remove_TCE_harmonics(all_tces.to_numpy(), 
                                            tolerance=0.0005)
@@ -588,7 +572,7 @@ class Injection_Test(object):
 def make_transit_mask(time, P, t0, dur):
 
     fold_time = (time - t0 + P/2.)%P - P/2.
-    mask = np.abs(fold_time) > 1.5*dur
+    mask = np.abs(fold_time) > 1.*dur
     
     return mask
 
@@ -1177,34 +1161,6 @@ def calc_mes_loop(timefold_bins, num, den):
 
 
 
-
-
-
-
-def compare_sinewave_and_transit_model(time,flux,t0,P,dur,limb_dark):
-
-
-    t0_time = (time-t0 + P/2) % P - P/2
-
-
-    
-    
-
-
-    return 1.
-
-
-
-
-
-
-def quick_vetting_check(time, flux, P, t0, ):
-
-
-    
-
-
-    return True
 
 
 
@@ -1946,14 +1902,16 @@ def estimate_transit_depth(fold_time, flux, t0, width,):
 
 
 
-def find_best_params_for_TCE(time, num, den, tdurs, P, texp, harmonics = [1., 1.5, 2., 3.]):
+def find_best_params_for_TCE(time, num, den, tdurs, P, texp, t0, harmonics = [1., 1.5, 2., 3.]):
     
     best_period = P
     best_tdur = 0.
     max_mes = 0.
     best_t0 = 0.
+
+    min_time = min(time)
     
-    t0_time = time-min(time)
+    t0_time = time-min_time
     
     for n in harmonics:
         
@@ -1973,12 +1931,16 @@ def find_best_params_for_TCE(time, num, den, tdurs, P, texp, harmonics = [1., 1.
             
             best_tdur = tdurs[dur_i]
             max_mes = all_maxmes[dur_i]
+
+            #mes_dur = mes[dur_i]
+            best_t0 = mes_time[mes_i] + texp/2. + min_time
             
-            best_t0 = np.sum(mes_time[mes_i-1:mes_i+2]*mes[dur_i,mes_i-1:mes_i+2])/np.sum(mes[dur_i,mes_i-1:mes_i+2]) + min(time)
             best_period = n*P
-            
-        
-    return best_period, max_mes, best_t0, best_tdur
+
+    if np.abs(best_t0-t0)<1.:
+        return best_period, max_mes, best_t0, best_tdur
+    else:
+        return  best_period, 0., best_t0, best_tdur
 
 
 
@@ -2007,25 +1969,25 @@ def mask_highest_TCE_and_check_others(TCEs, time, num, den, tdurs, threshold=7.,
             den_masked = den[tr_mask]
 
         fold_time = ((time - t0 + period/2.) % period )
-        _, mes = calc_mes(fold_time[tr_mask],num_masked,den_masked,period,norm=mes_norm)
+        mes_time, mes = calc_mes(fold_time[tr_mask],num_masked,den_masked,period,norm=mes_norm)
         
         max_mes = np.nanmax(mes)
         num_points, _ = np.histogram(fold_time[tr_mask], bins=np.arange(0,period,texp))
         ntransits = num_points[np.argmax(mes)]
+        new_t0 = mes_time[np.nanargmax(mes)]
 
-        if max_mes>threshold and max_mes > 0.5*mes_orig and ntransits>3:
+        t0_diff = np.abs(period/2.-new_t0)
+
+        if max_mes>threshold and max_mes > 0.5*mes_orig and ntransits>3 and t0_diff<tdur:
             tr_mask &= make_transit_mask(time=time, P=period, dur=tdur, t0=t0)
-            print('tce at {:.5f}: Modified MES = {:.2f}, REAL?'.format(period, max_mes))
+            print('tce at {:.5f}: Modified MES = {:.2f}, t0 diff={:.2f}, REAL?'.format(period, max_mes, t0_diff))
         else:
-            print('tce at {:.5f}: Modified MES = {:.2f}, FAKE!'.format(period, max_mes))
+            print('tce at {:.5f}: Modified MES = {:.2f}, t0 diff={:.2f}, FAKE!'.format(period, max_mes, t0_diff))
             true_TCE_list[i]=False
             
     return tces_sorted[true_TCE_list]
 
     
-
-
-
         
 
 

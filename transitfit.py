@@ -1,0 +1,35 @@
+import sys
+from os import path, getcwd
+
+from fast_histogram import histogram1d
+import matplotlib.pyplot as plt
+import pandas as pd
+from scipy.interpolate import griddata
+from scipy.ndimage import median_filter
+
+from .lightcurves import *
+from .utils import *
+from tqdm import tqdm
+
+filepath = path.abspath(__file__)
+dir_path = path.dirname(filepath)
+
+TRASH_DATA_DIR = dir_path+'/'
+
+
+
+class TransitFitter(object):
+
+
+    def __init__(self, Dump, use_density=True):
+
+        self.dump=Dump
+
+
+    def fit_tce(self, tce):
+
+        return 1.
+
+
+
+

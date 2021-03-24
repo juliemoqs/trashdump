@@ -436,16 +436,14 @@ def get_transit_depth_ppm(rp, rs):
 
 def get_transit_signal(width, depth, limb_dark=[0.4012, 0.5318, -0.2411,0.0194], exp_time=0.020417, pad=65536, b=0.15):
 
-    i = np.arccos(b/50.)*(180./np.pi)
-
     if len(limb_dark) != 4:
         limb_dark = [0.4012, 0.5318, -0.2411, 0.0194]
     
-    params = batman.TransitParams()    
+    params = batman.TransitParams()
+    params.a = 20.                        
     params.t0 = 0.                        
-    params.per = np.pi*(width)/np.arcsin(1./50.)                            
-    params.a = 50.                        
-    params.inc = i                      
+    params.per = np.pi*(width)/np.arcsin(1./params.a)
+    params.inc = np.arccos(b/params.a)*(180./np.pi)                      
     params.ecc = 0.                       
     params.w = 90.                        
     params.limb_dark = "nonlinear"       
@@ -457,7 +455,7 @@ def get_transit_signal(width, depth, limb_dark=[0.4012, 0.5318, -0.2411,0.0194],
     t = np.linspace(-3.*width , 3.*width, int(2*np.ceil(n_points)) )
 
     params.rp = np.sqrt(depth/1.0e6)
-    m = batman.TransitModel(params, t, exp_time=0.020417) 
+    m = batman.TransitModel(params, t, exp_time=exp_time, fac=0.05)
     lc = m.light_curve(params, )
 
     ends = np.array_split(np.ones( pad - len(lc) ), 2)
