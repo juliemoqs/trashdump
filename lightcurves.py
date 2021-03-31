@@ -6,6 +6,11 @@ import wotan
 import warnings
 
 
+filepath = path.abspath(__file__)
+dir_path = path.dirname(filepath)
+
+TRASH_DATA_DIR = dir_path+'/'
+
 # Object to read in single Quarter light curve files from Kepler
 class single_quarter_lc(object):    
     
@@ -185,7 +190,7 @@ class kepler_lc(object):
         return self
 
   
-    def remove_gap_edges(self, min_dif=0.5, sig=2.):
+    def remove_gap_edges(self, min_dif=0.5, sig=3.):
 
         self.time, self.detrended_pdcsap, edge_cut = flag_gap_edges(self.time, self.detrended_pdcsap, min_dif, sig)
 
@@ -243,7 +248,8 @@ class KepCBV(object):
                     'kplr2013098041711-q16-d25_lcbv.fits',
                     'kplr2013131215648-q17-d25_lcbv.fits']
 
-        open_file = fits.open(cbv_dir+cbvfiles[quarter])
+        
+        open_file = fits.open(TRASH_DATA_DIR+cbv_dir+cbvfiles[quarter])
         self.table = open_file[channel].data
         self.vectors = np.array([self.table['VECTOR_{}'.format(i)] for i in range(1,16)])
         open_file.close()
@@ -487,7 +493,7 @@ class KepData( object ):
         return lightcurve
     
 
-    def make_Transitsearch_LightCurve(self, use_pdcsap=False, **wotan_kw):
+    def make_Transitsearch_LightCurve(self, use_pdcsap=True, **wotan_kw):
 
         time = np.concatenate([self.lightcurves[i].time for i in range(len(self.lightcurves))] )
         nan_mask = np.concatenate([~np.isnan(self.lightcurves[i].sap) for i in range(len(self.lightcurves))] )
@@ -637,15 +643,12 @@ class TESS_30minData(object):
         flux_err = np.concatenate(lc_flux_errs)
         flux = np.concatenate(lc_fluxes)
         trend = np.concatenate(lc_trends)
-
-
         
         transitsearch_lightcurve = LightCurve(time = time, flux = flux,
                                               flux_err = flux_err,
                                               trend = trend, mask=nan_mask, flags = flags,
                                               mission='TESS', ID=self.tic,
                                               segment_dates=sector_dates)
-
 
         return transitsearch_lightcurve
     

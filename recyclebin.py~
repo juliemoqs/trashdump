@@ -43,7 +43,6 @@ class Recycle(object):
         self.dump = Dump
         self.tces = TCEs
 
-
         self.exptime = Dump.lc.exptime
         self.limb_coeff = Dump.limb_darkening[0]
 
@@ -95,7 +94,7 @@ class Recycle(object):
 
 
 
-    def mad_mes_metric(self, ):
+    def mad_mes_metrics(self, ):
 
 
         return 1.
