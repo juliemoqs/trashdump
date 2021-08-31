@@ -10,7 +10,10 @@ from scipy.ndimage import median_filter
 from .ffa import *
 from .lightcurves import *
 from .utils import *
+from .ses import *
+
 from tqdm import tqdm
+
 
 filepath = path.abspath(__file__)
 dir_path = path.dirname(filepath)
@@ -78,8 +81,8 @@ class Dump(object):
         max_period = baseline/n_trans
         max_dur = min( (13./24.) * (max_period/365.)**(1./3.) * rho_star**(-1./3.) * 1.5, maxtdur)
         
-        tdurs = np.unique( exptime  * (1.1)**np.arange(2,100) // exptime ) * exptime
-    
+        #tdurs = np.unique( exptime  * (1.1)**np.arange(2,100) // exptime ) * exptime
+        tdurs = (2.5*exptime)  * (1.1)**np.arange(2,100) 
         cut = tdurs<max_dur
         cut &= tdurs>exptime*2.5
     
@@ -106,13 +109,12 @@ class Dump(object):
         return limb_dark
 
 
-    def get_transit_model(self, depth, width, pad=None, b=0.15):
+    def get_transit_model(self, depth, width, pad=None, b=0.1):
 
         if pad is None:
             pad = len(self.lc.flux)*2
 
-        tr_model = get_transit_signal(width, depth, limb_dark=self.limb_darkening,
-                                      exp_time=self.lc.exptime, pad=pad, b=b)
+        tr_model = get_transit_signal(width, depth, limb_dark=self.limb_darkening[0],exp_time=self.lc.exptime, pad=pad, b=b)
         
         return tr_model-1.
 
@@ -130,7 +132,7 @@ class Dump(object):
     
     
 
-    def Calculate_SES(self, mask=None, var_calc='mad',fill_mode='reflect',tdurs=None, ses_weights=None, window_width=9., tdepth=84.):
+    def Calculate_SES(self, mask=None, var_calc='mad',fill_mode='reflect',tdurs=None, ses_weights=None, window_width=7., tdepth=84., ):
 
         if mask is None:
             mask = self.lc.mask.copy()
@@ -138,7 +140,7 @@ class Dump(object):
         gap_time, gap_flux, gap_array =  pad_time_series(self.lc.time.copy()[mask],
                                                          self.lc.flux.copy()[mask],
                                                          in_mode=fill_mode,
-                                    pad_end=False, fill_gaps=True )
+                                                         pad_end=False, fill_gaps=True )
 
         pad_time, pad_flux, pad_array =  pad_time_series(gap_time, gap_flux,
                                     pad_end=True, fill_gaps=False)
@@ -160,9 +162,10 @@ class Dump(object):
             #print( 'Calculating SES for duration = {:.2f} days'.format(dur) )
             
             Signal = self.get_transit_model(depth=tdepth,width=dur, pad=len(pad_array)  )
-            SignalTransform = ocwt(Signal)
+            SignalTransform = ocwt(Signal, )
 
-            ses, num, den, sig2 = calculate_SES(FluxTransform, SignalTransform,
+            ses, num, den, sig2 = calculate_SES(FluxTransform,
+                                                SignalTransform,
                                                 texp=self.lc.exptime,
                                                 window_size=window_width*dur,
                                                 var_calc=var_calc )
@@ -232,7 +235,7 @@ class Dump(object):
         nd_ses_mask = np.ix_(np.ones(len(self.tdurs), dtype=bool), ses_mask)
 
         
-        TCEs = Search_for_TCEs_in_all_Tdur_models(time=mask_time[ses_mask],
+        TCEs = Search_for_TCEs_in_all_Tdur_models(time=mask_time,#[ses_mask],
                                                   num=num[nd_ses_mask],
                                                   den=den[nd_ses_mask],
                                                   ses=ses[nd_ses_mask],
@@ -263,16 +266,19 @@ class Dump(object):
 
 
 
-    def Search_TCEs_FFA(self,super_sample=3, dur_range=[0.25,1.5], **tce_search_kw):
+    def Search_TCEs_FFA(self,super_sample=3, dur_range=[0.25,1.5],use_tce_mask=False,  P_range=None, **tce_search_kw,):
 
         
         all_tces = pd.DataFrame({'star_id':[],'period':[],'mes':[],'t0_bkjd':[],'tdur':[]}) 
 
-        ses_mask = self.lc.mask.copy()
+        if use_tce_mask:
+            ses_mask = self.tce_mask.copy()
+        else:
+            ses_mask = self.lc.mask.copy()
         ses, num, den = self.Calculate_SES(mask=ses_mask, fill_mode='reflect',
                                            tdurs=self.tdurs)
 
-        masktime = self.lc.time.copy()[self.lc.mask]
+        masktime = self.lc.time.copy()[ses_mask]
         
         for i_dur in range(len(self.tdurs)):
 
@@ -284,14 +290,25 @@ class Dump(object):
             ses_i = self.ses[i_dur].copy()
             num_i = self.num[i_dur].copy()
             den_i = self.den[i_dur].copy()
-            
-    
-            P_min = max(365. * (dur * 24./13.)**3. * (1.) * dur_range[0]**3.,  dur*8.)
-            P_max = min(365. * (dur * 24./13.)**3. * (1.) * dur_range[1]**3.,  max(self.search_periods) )
 
-            mid_time, num_hist, den_hist = FFA_Search_Duration_Downsample(masktime, num_i, den_i, dur=dur, exptime=self.lc.exptime, super_sample=super_sample)
+            if P_range is None:
+                
+                P_min = max( (dur * 24./1.426)**3. * (self.star_density) * dur_range[0]**3.,  dur*5.)
+                P_max = min( (dur * 24./1.426)**3. * (self.star_density) * dur_range[1]**3.,  max(self.search_periods) )
+            else:
+                P_min, P_max = P_range
+
+            if super_sample is None:
+                mid_time, num_hist, den_hist = FFA_Search_Duration_Downsample(masktime, num_i, den_i, dur=self.lc.exptime, exptime=self.lc.exptime, super_sample=1)
+                TCEs = FFA_TCE_Search(time=mid_time, num=num_hist, den=den_hist,
+                                  cadence=self.lc.exptime, kicid=self.lc.ID,
+                                  P0_range=(P_min,P_max), dur=dur,
+                                  **tce_search_kw)
+
+            else:
+                mid_time, num_hist, den_hist = FFA_Search_Duration_Downsample(masktime, num_i, den_i, dur=dur, exptime=self.lc.exptime, super_sample=super_sample)
             
-            TCEs = FFA_TCE_Search(time=mid_time, num=num_hist, den=den_hist,
+                TCEs = FFA_TCE_Search(time=mid_time, num=num_hist, den=den_hist,
                                   cadence=dur/super_sample, kicid=self.lc.ID,
                                   P0_range=(P_min,P_max), dur=dur,
                                   **tce_search_kw)
@@ -299,7 +316,7 @@ class Dump(object):
 
             if len(TCEs.dropna())>0:
                 tces_noharm = remove_TCE_harmonics(TCEs.to_numpy(), known_TCEs=None,
-                                                      tolerance=0.0001)
+                                                      tolerance=0.001)
                 for tce in tces_noharm:
             
                     tce_per, tce_mes, tce_t0, tce_width = find_best_params_for_TCE(time=masktime, num=num, den=den,t0=tce[3], tdurs=self.tdurs, P=tce[1], texp=self.lc.exptime,)
@@ -307,14 +324,44 @@ class Dump(object):
 
                     TCE_append = [tce[0], tce_per, tce_mes, tce_t0, tce_width]
                     all_tces = pd.concat([all_tces, pd.DataFrame([TCE_append],columns=['star_id','period','mes','t0_bkjd','tdur'])])
+            
 
+        if len(all_tces.dropna())==0:
+            return all_tces
 
-        tces_noharm = remove_TCE_harmonics(all_tces.to_numpy(), 
-                                           tolerance=0.0005)
-        TCEs_checked = mask_highest_TCE_and_check_others(TCEs=tces_noharm,
+        #tces_noharm = remove_TCE_harmonics(all_tces.to_numpy(), 
+        #                                   tolerance=0.01)
+        TCEs_checked = mask_highest_TCE_and_check_others(TCEs=all_tces.to_numpy(),
                             time=masktime, num=num, den=den, tdurs=self.tdurs)
 
-        return TCEs_checked
+        return pd.DataFrame(TCEs_checked, columns=['star_id','period','mes','t0','tdur'] )
+
+
+
+    def Iterative_FFA_Search(self, niter=3, super_sample=3, dur_range=[0.25,1.5], tce_search_kw=None):
+
+        all_tces = np.array([])
+        i=0
+        self.tce_mask = self.lc.mask.copy()
+        while i<= niter:
+            i+=1
+
+            ffa_tces = self.Search_TCEs_FFA(super_sample, dur_range,use_tce_mask=True, **tce_search_kw)
+
+            if len(ffa_tces)==0:
+                i=4
+            else:
+                all_tces = np.append([all_tces], ffa_tces).reshape(-1, 5)
+
+                print(all_tces)
+                
+                for tce in all_tces:
+                    new_mask = make_transit_mask(time=self.lc.time, P=tce[1],
+                                                  t0=tce[3], dur=tce[4]*1.5)
+                    self.tce_mask &= new_mask
+
+
+        return all_tces
 
     
 
@@ -378,6 +425,66 @@ class Dump(object):
         
         return pd.DataFrame(candidates.reshape(-1,5), columns=['star_id','period','mes','t0_bkjd','tdur'])
 
+
+    def get_max_mes(self, P, calc_ses=False):
+
+        if calc_ses:
+            ses, num, den = self.Calculate_SES()
+        else:
+            ses, num, den = self.ses.copy(), self.num.copy(), self.den.copy()
+
+        fold_time = (self.lc.time[self.lc.mask]-self.lc.time[0])%P
+        maxmes = 0.
+        maxt0 = 0.
+        for i in range(len(self.tdurs)):
+            t_mes,mes = calc_mes(fold_time, num=num[i], den=den[i], P=P,
+                           texp=self.lc.exptime, )
+
+            if np.max(mes)>maxmes:
+                maxmes=np.max(mes)
+                maxt0 = t_mes[np.argmax(mes)]
+                        
+
+        return maxt0+self.lc.time[0], maxmes
+
+    def get_second_max_mes(self, P, t0, calc_ses=False):
+
+        if calc_ses:
+            ses, num, den = self.Calculate_SES()
+        else:
+            ses, num, den = self.ses.copy(), self.num.copy(), self.den.copy()
+
+        fold_time = (self.lc.time[self.lc.mask]-self.lc.time[0])%P
+        maxmes = 0.
+        maxt0 = 0.
+        for i in range(len(self.tdurs)):
+            t_mes,mes = calc_mes(fold_time, num=num[i], den=den[i], P=P,
+                           texp=self.lc.exptime, )
+            foldmask = np.abs(t_mes-t0)>1.
+
+
+            if np.max(mes[foldmask])>maxmes:
+                maxmes=np.max(mes)
+                maxt0 = t_mes[np.argmax(mes[foldmask])]
+                        
+
+        return maxmes
+
+    def calc_mes(self, P , ntran=2, calc_ses=False):
+
+        if calc_ses:
+            ses, num, den = self.Calculate_SES()
+        else:
+            ses, num, den = self.ses.copy(), self.num.copy(), self.den.copy()
+
+        fold_time = (self.lc.time[self.lc.mask]-self.lc.time[0])%P
+        foldtime_bins = np.digitize(fold_time,bins=np.arange(0,P,self.lc.exptime) )
+        meslist = calc_mes_loop(foldtime_bins, num=num, den=den )
+        
+        return np.array(meslist)
+
+        
+        
 
 
     def plot_mes(self, t0, P, tdur, norm=False, ses_calc='mad', zoom=True, calc_ses=False, tce_mask=False, use_mask=None, plot_binflux=True):
@@ -549,21 +656,6 @@ class LightCurve(object):
 
 
 
-class Injection_Test(object):
-
-
-    def __init__(self, LightCurve, P_range=[1.,1000.], Rp_range=[-0.5,1.5]):
-
-        self.lc = LightCurve
-        self.ts = TransitSearch(LightCurve)
-
-
-
-
-    def inject_transit_signal():
-
-
-        return 1.
 
 
 
@@ -587,65 +679,6 @@ def get_limb_darkening_grid(mission, grid_file='data/meta/limb_coeffs.h5'):
 
 KEPLER_LIMB_DARKENING_GRID = get_limb_darkening_grid('KEPLER')
 TESS_LIMB_DARKENING_GRID = get_limb_darkening_grid('TESS')
-
-
-def get_whitening_coeffs(t, x, window_size, seg_dates, exp_time=0.020417, method='mad',
-                  slat_frac=0.2, n_mad_window=51):
-
-
-    for i,seg in seg_dates:
-
-        if i<len(seg_dates)-1:
-            x_seg = x[np.logical_and(t>=seg and t<seg_dates[i+1])]
-        else:
-            x_seg = x[np.logical_and(t>=seg and t<seg_dates[i+1])]
-
-        x_seg_pad = pad_time_series()
-
-    return 1.
-
-
-
-
-def calc_var_stat(x, window_size, exp_time=0.020417, method='mad',
-                  slat_frac=0.2, n_mad_window=51):
-
-    if method=='mean':
-        window_points = 2*int(window_size/exp_time)
-        sig2 = moving_average( x**2., n=window_points+1)
-
-        return sig2
-    
-    elif method=='mad':
-        
-        window_points = 2*int(window_size/exp_time)
-
-        if window_points<n_mad_window:
-            sig = 1.4826*median_filter( np.abs(x), window_points+1 , mode='reflect')
-        else:
-            nskip = int(np.floor(window_points/n_mad_window))
-            x_skipped = x[::nskip] 
-            sig_decimated = 1.4826*median_filter( np.abs(x_skipped), n_mad_window , mode='reflect')
-            sig = np.repeat(sig_decimated, nskip)[:len(x)]
-
-        #if any(np.isnan(sig)):
-        #    mask = np.isnan(sig)
-        #    sig[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask), sig[~mask])
-        return sig**2.
-
-    elif method=='gap_mean':
-        window_points = 2*int(window_size/exp_time)
-
-        slat_points = int(window_points/2)
-        delta_slat = int((slat_frac)*window_points/2)
-
-        delta_slat = int(delta_slat/2)*2
-        slat_points = int(slat_points/2)*2
-        
-        sig2_left = moving_average( np.roll(x**2., -delta_slat), n=slat_points-1)
-        sig2_right = moving_average(np.roll(x**2., delta_slat), n=slat_points-1)
-        
-        return 0.5*(sig2_left+sig2_right)
 
 
 
@@ -689,40 +722,6 @@ def calculate_ses_by_segment(time, flux, seg_dates, var_calc='mad'):
     return 1.
 
     
-
-
-def calculate_SES(flux_transform, signal_transform, window_size, var_calc='mad', texp=0.0204, seg_dates=None):
-
-    # Calculate the Doubly-Whitened Coefficients
-    sig2 = [1./calc_var_stat(x, window_size, method=var_calc, exp_time=texp) for i,x in enumerate(flux_transform)]
-
-    n_levels = len(flux_transform)
-    sig2 = np.array(sig2, )
-
-    # Trim SignalTransform to speed up computation
-    midpoint = signal_transform[0].size // 2
-    signal_transform_trimmed = signal_transform[:,midpoint-250:midpoint+251 ]
-        
-    N = np.zeros(len(sig2[0]) )
-    D = np.zeros(len(sig2[0]) )
-
-    levels = np.concatenate([np.arange(1,n_levels), [n_levels-1] ] )
-    
-    for i, l in enumerate(levels):
-
-        # Use direct convolution to avoid rounding errors from high dynamic range
-        dN =  2.** (-l) * convolve(sig2[i]*flux_transform[i], signal_transform_trimmed[i,::-1], mode='same',method='direct')
-        N +=dN
-
-        dD =   2.** (-l) * convolve(sig2[i], signal_transform_trimmed[i,::-1]**2., mode='same',method='direct')
-        D +=  dD 
-    
-    num = np.sum(N, axis=0)
-    den = np.sum(D, axis=0)
-    
-    ses = N / np.sqrt(D)
-    
-    return ses, N, D, sig2[0]
 
 
 
@@ -953,12 +952,18 @@ def Detrend_and_Calculate_SES_for_all_Tdur_models(lc, tdurs=np.array([1.,1.5,2,2
 def FFA_Search_Duration_Downsample(time, num, den, dur, exptime, super_sample=3.):    
 
     norm_factor = dur/(super_sample * exptime)
-    time_bins = np.arange(min(time), max(time)+dur/super_sample, dur/super_sample)
-    
-    num_hist,_ = np.histogram(time, bins = time_bins, weights = num/norm_factor)
-    den_hist, time_bins = np.histogram(time, bins = time_bins, weights = den/norm_factor)
-    
+    dt =  dur/super_sample
+    time_bins = np.arange(min(time), max(time)+dur/super_sample, dt)
     mid_time = (time_bins[:-1] + time_bins[1:])/2.
+
+    padded_time, padded_num, padded_truth = pad_time_series(time, num, in_mode='constant')
+    _, padded_den, _ = pad_time_series(time, den, in_mode='constant')
+
+    
+    
+    num_hist,_ = np.histogram(padded_time, bins=time_bins, weights=padded_num/norm_factor)
+    den_hist,_ = np.histogram(padded_time, bins=time_bins, weights=padded_den/norm_factor)
+    
 
     return mid_time, num_hist, den_hist
 
@@ -1115,53 +1120,6 @@ def Search_for_TCEs_from_h5_file(lc_file_object, tcefile='results/tce_detection_
     
     return TCEs
 '''
-
-
-
-
-def calc_mes(fold_time, num, den, P, n_trans=2., texp=0.0204, norm=False):
-
-    nbins = int(P//texp)+1
-    bin_range = (0,P)
-    bin_edge = np.linspace(bin_range[0], bin_range[1], nbins)
-
-    num_binned = histogram1d(fold_time, weights=num, bins=nbins, range=bin_range)
-    den_binned = histogram1d(fold_time, weights=den, bins=nbins, range=bin_range)
-    n_transits = histogram1d(fold_time, bins=nbins, range=bin_range)
-    
-    transit_cut = n_transits>=n_trans
-    
-    mes = num_binned / np.sqrt(den_binned)
-
-    if norm:
-        mes -= np.nanmedian(mes)
-        mes/=mad(mes[~np.isnan(mes)])
-    
-    mes[~transit_cut] = 0.
-    
-    return bin_edge, mes
-
-
-
-def calc_mes_fast(timefold_bins, num, den):
-
-    numbinned = np.bincount(timefold_bins, weights=num) 
-    denbinned = np.bincount(timefold_bins, weights=den) 
-    
-    mes = numbinned/np.sqrt(denbinned)
-
-    return mes
-
-
-
-def calc_mes_loop(timefold_bins, num, den):
-        
-    mes_all = [calc_mes_fast(timefold_bins, num[i], den[i]) for i in range(num.shape[0])]
-    return np.array(mes_all)
-
-
-
-
 
 
 
@@ -1439,15 +1397,18 @@ def Search_for_TCEs_in_all_Tdur_models(time,num,den,ses,period_sampling,kicid,t_
 def remove_TCE_harmonics(test_TCEs, known_TCEs=None, tolerance=0.0001):
 
 
-    test_TCEs = test_TCEs[ test_TCEs[:,1]>5.*test_TCEs[:,4] ]
+    #test_TCEs = test_TCEs[ test_TCEs[:,1]>5.*test_TCEs[:,4] ]
     
     sorted_mes_index = np.argsort(-test_TCEs[:,2])
+
+    if len(test_TCEs)==1:
+        return test_TCEs
     
     if known_TCEs is None:
         test_TCEs_sorted = test_TCEs[sorted_mes_index[1:]]
         is_harmonic = np.zeros(len(test_TCEs)-1, dtype=bool)
-        known_periods =  [test_TCEs[sorted_mes_index[0],1]]
-        known_t0s =  [test_TCEs[sorted_mes_index[0],3]]
+        known_periods =  np.array([test_TCEs[sorted_mes_index[0],1]])
+        known_t0s =  np.array([test_TCEs[sorted_mes_index[0],3]])
         add=True
 
     else:
@@ -1902,7 +1863,7 @@ def estimate_transit_depth(fold_time, flux, t0, width,):
 
 
 
-def find_best_params_for_TCE(time, num, den, tdurs, P, texp, t0, harmonics = [1., 1.5, 2., 3.]):
+def find_best_params_for_TCE(time, num, den, tdurs, P, texp, t0, harmonics = [1., 1.5, 2., 3.], ntransits=3):
     
     best_period = P
     best_tdur = 0.
@@ -1919,9 +1880,10 @@ def find_best_params_for_TCE(time, num, den, tdurs, P, texp, t0, harmonics = [1.
         fold_time = np.mod(t0_time, n*P)
         
         foldtime_bins = np.digitize(fold_time, bins=mes_time )
-        #number_transits = np.bincount(foldtime_bins)
-    
+        number_transits = np.bincount(foldtime_bins)
         mes = calc_mes_loop(foldtime_bins, num, den)
+
+        mes[:,number_transits<ntransits]=0.
         
         if np.nanmax(mes)>max_mes:
             
@@ -1953,7 +1915,8 @@ def mask_highest_TCE_and_check_others(TCEs, time, num, den, tdurs, threshold=7.,
     
     # Assume highest S/N TCE is real, and mask it
     tr_mask = make_transit_mask(time, P=top_tce[1],t0=top_tce[3],dur=top_tce[4] )
-    true_TCE_list = np.ones(len(tces_sorted), dtype=bool)
+    true_TCE_list = np.zeros(len(tces_sorted), dtype=bool)
+    true_TCE_list[0]=True
     
     # Check if TCEs remain after masking the higher S/N TCEs. 
     for i in range(1, len(tces_sorted)):
@@ -1972,17 +1935,18 @@ def mask_highest_TCE_and_check_others(TCEs, time, num, den, tdurs, threshold=7.,
         mes_time, mes = calc_mes(fold_time[tr_mask],num_masked,den_masked,period,norm=mes_norm)
         
         max_mes = np.nanmax(mes)
-        num_points, _ = np.histogram(fold_time[tr_mask], bins=np.arange(0,period,texp))
+        num_points, _ = np.histogram(fold_time[tr_mask], bins=np.arange(0,period+texp,texp))
         ntransits = num_points[np.argmax(mes)]
         new_t0 = mes_time[np.nanargmax(mes)]
 
         t0_diff = np.abs(period/2.-new_t0)
 
-        if max_mes>threshold and max_mes > 0.5*mes_orig and ntransits>3 and t0_diff<tdur:
+        if (max_mes>threshold and max_mes>0.5*mes_orig and ntransits>3 and t0_diff<tdur/2.):
             tr_mask &= make_transit_mask(time=time, P=period, dur=tdur, t0=t0)
-            print('tce at {:.5f}: Modified MES = {:.2f}, t0 diff={:.2f}, REAL?'.format(period, max_mes, t0_diff))
+            print('tce at {:.5f}: Original MES = {:.2f} Modified MES = {:.2f}, t0 diff={:.2f}, MAYBE REAL?'.format(period, mes_orig, max_mes, t0_diff))
+            true_TCE_list[i]=True
         else:
-            print('tce at {:.5f}: Modified MES = {:.2f}, t0 diff={:.2f}, FAKE!'.format(period, max_mes, t0_diff))
+            #print('tce at {:.5f}: Modified MES = {:.2f}, t0 diff={:.2f}, FAKE!'.format(period, max_mes, t0_diff))
             true_TCE_list[i]=False
             
     return tces_sorted[true_TCE_list]

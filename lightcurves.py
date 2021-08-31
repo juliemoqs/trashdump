@@ -1,7 +1,7 @@
 import sys
 
 from .utils import *
-from .transit_search import *
+from .dump import *
 import wotan
 import warnings
 
@@ -556,7 +556,7 @@ class KepData( object ):
 
         
         if fname is None:
-            fname = 'kic{:9}_kepdata.pkl'.format(self.kic)
+            fname = 'kplr{:9}_kepdata.pkl'.format(self.kic)
         
 
         return 1.
@@ -583,7 +583,8 @@ class TESS_2minData(object):
 class TESS_30minData(object):
 
     '''
-    Designed to work with Eleanor FFI Lightcurves. Input a list of TargetData objects 
+    Designed to work with Eleanor FFI Lightcurves. 
+    Input a list of TargetData objects 
     for each sector, and go from there. 
     '''
 

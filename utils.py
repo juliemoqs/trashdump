@@ -13,37 +13,14 @@ from tqdm import tqdm
 
 import batman
 from wotan import flatten
-import pywt
 
 import warnings
 
+from collections import deque
+from bisect import insort, bisect_left
+from itertools import islice
 
 
-def make_dec_filters(wavelet_name, levels):
-    
-    all_dec_lo = []
-    all_dec_hi = []
-    
-    wavelet = pywt.Wavelet(wavelet_name)
-    h0, h1, _, _ = wavelet.filter_bank
-    
-    all_dec_lo = [h0]
-    all_dec_hi = [h1]
-    
-    
-    for i in range(1,levels):
-                
-        h0_old = all_dec_lo[i-1]
-        h1_old = all_dec_hi[i-1]
-
-        all_dec_lo.append( np.repeat(h0_old[::2], 2 ) )
-        all_dec_hi.append( np.repeat(h1_old[::2], 2 ) )
-        
-    return all_dec_lo, all_dec_hi
-
-
-
-ocwt_filters = make_dec_filters('db12', 16)
 
 
 def get_lc_files(kic, directory='data/lightcurves'):
@@ -145,27 +122,6 @@ def sigma_clip(x, y, upper_sig=4., lower_sig=np.inf, use_mad=False):
     
     return x[cut], y[cut], cut
 
-    
-
-def ocwt(arr, dec_filters=ocwt_filters,):
-    
-    all_dec_lo, all_dec_hi = dec_filters
-    levels = min(int(np.log2(len(arr))), len(all_dec_lo))
-    cD = []
-
-    a=np.copy(arr)
-    
-    for i in range(levels-1):
-        
-        d = fftconvolve(a, all_dec_hi[i], mode='same', )
-        a = fftconvolve(a, all_dec_lo[i], mode='same', )
-
-        cD = np.append(cD, d)
-    
-    cD = np.append(cD, a)
-    
-    return np.array(cD).reshape(levels, -1)
-
 
 
 def make_binned_flux(t, f, texp, P=None):
@@ -213,6 +169,27 @@ def rolling_trim_mean(x, n, percentile=0.1):
             x_sorted.sort()
     return res
 
+
+
+
+def running_median_insort(seq, window_size):
+    """Contributed by Peter Otten"""
+    seq = iter(seq)
+    d = deque()
+    s = []
+    result = []
+    for item in islice(seq, window_size):
+        d.append(item)
+        insort(s, item)
+        result.append(s[len(d)//2])
+    m = window_size // 2
+    for item in seq:
+        old = d.popleft()
+        d.append(item)
+        del s[bisect_left(s, old)]
+        insort(s, item)
+        result.append(s[m])
+    return np.array(result)
 
 
 
@@ -434,33 +411,9 @@ def get_transit_depth_ppm(rp, rs):
     return 84. * rp**2. / rs**2.
 
 
-def get_transit_signal(width, depth, limb_dark=[0.4012, 0.5318, -0.2411,0.0194], exp_time=0.020417, pad=65536, b=0.15):
 
-    if len(limb_dark) != 4:
-        limb_dark = [0.4012, 0.5318, -0.2411, 0.0194]
-    
-    params = batman.TransitParams()
-    params.a = 20.                        
-    params.t0 = 0.                        
-    params.per = np.pi*(width)/np.arcsin(1./params.a)
-    params.inc = np.arccos(b/params.a)*(180./np.pi)                      
-    params.ecc = 0.                       
-    params.w = 90.                        
-    params.limb_dark = "nonlinear"       
-    params.u = limb_dark 
-    
-    n_points = 3.*width/exp_time
-    n_pad = int(pad - 2*n_points)
-    
-    t = np.linspace(-3.*width , 3.*width, int(2*np.ceil(n_points)) )
 
-    params.rp = np.sqrt(depth/1.0e6)
-    m = batman.TransitModel(params, t, exp_time=exp_time, fac=0.05)
-    lc = m.light_curve(params, )
-
-    ends = np.array_split(np.ones( pad - len(lc) ), 2)
-    
-    return np.concatenate( [ends[0], lc, ends[1] ])
-
+def get_p_tdur_t0(tce):
+    return tce[1], tce[4], tce[3]
 
 
