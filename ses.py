@@ -5,82 +5,17 @@ from scipy.ndimage import median_filter
 
 from scipy.fftpack import rfft, irfft
 import pywt
-
-
-'''
-
-def make_dec_filters(wavelet_name, levels):
-    
-    all_dec_lo = []
-    all_dec_hi = []
-    
-    wavelet = pywt.Wavelet(wavelet_name)
-    h0, h1, _, _ = wavelet.filter_bank
-
-    #H0 = rfft(h0)
-    #H1 = rfft(h1)
-    
-    
-    all_dec_lo = [h0]
-    all_dec_hi = [h1]
-    
-    
-    for i in range(1,levels):
-                
-        h0_old = all_dec_lo[i-1]
-        h1_old = all_dec_hi[i-1]
-
-
-        all_dec_lo.append(np.repeat(h0_old[1::2],2))
-        all_dec_hi.append(np.repeat(h1_old[1::2],2))
-        
-        #all_dec_lo.append(np.concatenate([h0_old[0::2],h0_old[1::2][::-1]]) )
-        #all_dec_hi.append(np.concatenate([h1_old[0::2],h1_old[1::2][::-1]]) )
-        
-    return all_dec_lo, all_dec_hi
-
-
-#ocwt_filters = make_dec_filters('db12', 16)
-
-
-
-def ocwt_WRONG(arr, dec_filters=ocwt_filters,norm=True):
-    
-    all_dec_lo, all_dec_hi = dec_filters
-    levels = min(int(np.log2(len(arr))), len(all_dec_lo))
-    cD = []
-
-    a=np.copy(arr)
-    
-    for i in range(levels-1):
-        
-        d = convolve(arr, all_dec_hi[i], mode='same', )
-        a = convolve(arr, all_dec_lo[i], mode='same', )
-
-        cD = np.append(cD, d)
-    
-    cD = np.append(cD, a).reshape(levels, -1)
-
-    if norm:
-        return cD / np.vstack(np.median(np.abs(cD),axis=1))
-    else:
-        return cD
-
-
-'''
-
-
-    
+import batman
 
 
 def ocwt(x, max_level=14):
-    level = min(max_level, np.log2(len(x)) )
-    return np.array(pywt.swt(x, 'haar', trim_approx=True, norm=False, level=level) )[::-1]
+    level = min(max_level, np.log2(len(x))-1 )
+    return np.array(pywt.swt(x, 'haar', trim_approx=True, norm=True, level=level) )[::-1]
 
 
     
 
-def get_transit_signal(width, depth, limb_dark=[0.4012, 0.5318, -0.2411,0.0194], exp_time=0.020417, pad=65536, b=0.):
+def get_transit_signal(width, depth, limb_dark=[0.4012, 0.5318, -0.2411,0.0194], exp_time=0.020417, pad=65536, b=0., n_width=3.):
 
     if len(limb_dark) != 4:
         limb_dark = [0.4012, 0.5318, -0.2411, 0.0194]
@@ -95,16 +30,20 @@ def get_transit_signal(width, depth, limb_dark=[0.4012, 0.5318, -0.2411,0.0194],
     params.limb_dark = "nonlinear"       
     params.u = limb_dark 
     
-    n_points = 3.*width/exp_time
+    n_points = n_width*width/exp_time
     n_pad = int(pad - 2*n_points)
     
     #t = np.linspace(-3.*width , 3.*width, int(2*np.ceil(n_points)) )
 
-    t = np.concatenate([(-np.arange(exp_time, 3*width, exp_time))[::-1], np.arange(0., 3*width, exp_time)])
+    t = np.concatenate([(-np.arange(exp_time, n_width*width, exp_time))[::-1], np.arange(0., n_width*width, exp_time)])
     
     params.rp = np.sqrt(depth/1.0e6)
     m = batman.TransitModel(params, t, exp_time=exp_time, fac=0.001, supersample_factor=5)
     lc = m.light_curve(params, )
+
+    if len(lc)>pad:
+        print(pad, len(lc) )
+        print('What the hell? Light curve is longer than padded light curve')
 
     ends = np.array_split(np.ones( pad - len(lc) ), 2)
     
@@ -113,8 +52,8 @@ def get_transit_signal(width, depth, limb_dark=[0.4012, 0.5318, -0.2411,0.0194],
 
 
 
-def calc_var_stat(x, window_size, exp_time=0.020417, method='mad',
-                  slat_frac=0.2, n_mad_window=251):
+def calc_var_stat(x, window_size, exp_time, method='mad',
+                  slat_frac=0.2, n_mad_window=99_001):
 
     if method=='mean':
         window_points = 2*int(window_size/exp_time)
@@ -127,17 +66,17 @@ def calc_var_stat(x, window_size, exp_time=0.020417, method='mad',
         window_points = 2*int(window_size/exp_time)
 
         if window_points<n_mad_window:
-            sig = 1.4826*median_filter( np.abs(x), window_points+1 , mode='reflect')
-            #sig = 1.4826 * running_median_insort(np.abs(x), window_points)
+            sig = 1.4826 * running_median_insort(np.abs(x), window_points)
         else:
             nskip = int(np.floor(window_points/n_mad_window))
-            x_skipped = x[::nskip] 
-            #sig_decimated = 1.4826*running_median_insort( np.abs(x_skipped), n_mad_window , mode='reflect')
-            sig_decimated = 1.4826*median_filter( np.abs(x_skipped), n_mad_window, mode='reflect')
-            
+            x_skipped = x[0::nskip] 
+            sig_decimated = 1.4826*running_median_insort(np.abs(x_skipped), n_mad_window)
             sig = np.repeat(sig_decimated, nskip)[:len(x)]
-            sig = (np.roll(sig,-1)+np.roll(sig,1)+sig)/3.
 
+        if (sig==0).any():
+            nbad = np.sum(sig==0)
+            print('WARNING! VAR STAT == 0 AT {}/{} CADENCES'.format(nbad,len(sig)))
+            sig[np.where(sig==0)[0]] = np.nanmedian(sig)
 
         return sig**2.
 
@@ -158,7 +97,7 @@ def calc_var_stat(x, window_size, exp_time=0.020417, method='mad',
 
 
     
-def get_whitening_coeffs(t, x, window_size, seg_dates, exp_time=0.020417, method='mad',
+def get_whitening_coeffs(t, x, window_size, exp_time=0.020417, method='mad',
                   slat_frac=0.2, n_mad_window=51):
 
 
@@ -176,18 +115,18 @@ def get_whitening_coeffs(t, x, window_size, seg_dates, exp_time=0.020417, method
 
 
 
-def calculate_SES(flux_transform, signal_transform, window_size, var_calc='mad', texp=0.0204, seg_dates=None):
+def calculate_SES(flux_transform, signal_transform, window_size, var_calc='mad', texp=0.0204,):
 
     # Calculate the Doubly-Whitened Coefficients
     sig2 = [1./calc_var_stat(x, window_size*2**i, method=var_calc, exp_time=texp) for i,x in enumerate(flux_transform)]
-
-    n_levels = len(flux_transform)
+    
     sig2 = np.array(sig2, )
+    
+    n_levels = len(flux_transform)
         
     N = np.zeros(len(sig2[0]) )
     D = np.zeros(len(sig2[0]) )
 
-    #signal_transform /=  np.vstack(np.max(np.abs(signal_transform),axis=1))
     
     levels = np.concatenate([np.arange(1,n_levels), [n_levels-1] ] )
     
@@ -198,7 +137,7 @@ def calculate_SES(flux_transform, signal_transform, window_size, var_calc='mad',
     
     ses = N / np.sqrt(D)
     
-    return ses, N, D, sig2[0]
+    return ses, N, D, sig2
 
 
 

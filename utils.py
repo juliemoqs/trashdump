@@ -172,9 +172,10 @@ def rolling_trim_mean(x, n, percentile=0.1):
 
 
 
-def running_median_insort(seq, window_size):
+def running_median_insort(x, window_size):
     """Contributed by Peter Otten"""
-    seq = iter(seq)
+    x = np.pad(x, (window_size//2, 0), mode='reflect') # Pad beginning/end of array to avoid edge effects
+    seq = iter(x)
     d = deque()
     s = []
     result = []
@@ -186,12 +187,25 @@ def running_median_insort(seq, window_size):
     for item in seq:
         old = d.popleft()
         d.append(item)
-        del s[bisect_left(s, old)]
+        try:
+            del s[bisect_left(s, old)]
+        except IndexError:
+            del s[bisect_left(s, old)-1]
         insort(s, item)
         result.append(s[m])
-    return np.array(result)
+        
+    return np.array(result[window_size//2:])
 
 
+def running_median_edge_fix(x, window_size):
+
+    res1 = running_median_insort(x, window_size)
+    res2 = running_median_insort(x[::-1], window_size)
+
+    window = min(len(x)//4, window_size)
+
+    return np.concatenate([res1[window//2:],res2[-2*window//2:-window//2]])
+    
 
 def mad(arr, scale=1.4826):
     """ Median Absolute Deviation: a "Robust" version of standard deviation.
@@ -251,84 +265,111 @@ def fill_gap_AR(y, n_add, gap):
 
     yreg = y[gap - nlag1:gap]
     yreg2 = y[gap+1:gap+nlag2][::-1]    
+
     
     #if np.sum((yreg-np.mean(yreg))**2.)>np.sum((yreg2-np.mean(yreg2))**2.):
-    fill2 = AutoReg(yreg2, lags=int(0.37*nlag2) ).fit().predict( start=len(yreg2), end=len(yreg2)+n_add, )
+    fill2 = AutoReg(yreg2, lags=int(0.25*nlag2) ).fit().predict( start=len(yreg2), end=len(yreg2)+n_add-1, )
     #else:
-    fill = AutoReg(yreg, lags=int(0.37*nlag1) ).fit().predict( start=len(yreg), end=len(yreg)+n_add, )
-
+    fill = AutoReg(yreg, lags=int(0.25*nlag1) ).fit().predict( start=len(yreg), end=len(yreg)+n_add-1, )
     
     weights = np.linspace(0,1,len(fill))
-    fillgap = fill * weights + fill2 * weights[::-1]
+    fillgap = fill * weights + fill2[::-1] * weights[::-1]
 
-    return fillgap
+    med_fillgap =  np.median(fillgap)
+    fillgap -= med_fillgap
+    
+    return med_fillgap + fillgap / np.max(np.array([weights, weights[::-1]]), axis=0)
     
 
 
-def fill_all_gaps_AR(x, y, gap_size=3, cadence=1):
+def fill_all_gaps_AR(x, y, cadence,  gap_size=6):
     
     dx = x[1:]-x[:-1]
         
-    gap_inds = np.arange(len(dx), dtype=int)[dx>1.001*cadence]    
+    gap_inds = np.arange(len(dx), dtype=int)[dx>1.01*cadence]    
     
     y_tofill = []
     x_tofill = []
     fill_ind = []
 
-    print('Filling Gaps ... ')
-    
-    for gap in tqdm(gap_inds):
-        
-        n_add = int(dx[gap]//cadence) 
-        fill_ind.extend(np.zeros(n_add)+gap)
-        x_tofill.extend(np.linspace(x[gap]+cadence, x[gap+1], n_add) )
 
-        if n_add>gap_size:
-            y_tofill.extend( fill_gap_AR(y, n_add-1, gap ) ) 
+    for gap in gap_inds:
+        
+        n_add = int(np.round(dx[gap]/cadence)-1)
+        fill_ind.extend(np.zeros(n_add,dtype=int)+gap)
+        
+        x_tofill.extend(np.linspace(x[gap]+cadence, x[gap+1]-cadence, n_add) )
+
+        if n_add+1>gap_size:
+            gap_fill = fill_gap_AR(y, n_add, gap )
+            y_tofill.extend(gap_fill )
+
+              
         else:
-            y_tofill.extend( y[gap-n_add:gap][::-1])  
+            if gap<n_add:
+                gap_fill = y[gap+2:gap+n_add+2][::-1]
+            else:
+                gap_fill =  y[gap-n_add:gap][::-1]
+
+            y_tofill.extend(gap_fill)  
     
     y_filled = np.insert(y, obj=fill_ind, values=y_tofill, axis=0)
     x_filled = np.insert(x, obj=fill_ind, values=x_tofill, axis=0)
+    boo_filled = np.insert(np.ones_like(x),obj=fill_ind,
+                           values=np.zeros_like(x_tofill), axis=0)
             
-    return x_filled, y_filled
+    return x_filled, y_filled, boo_filled
 
 
 
 
 
-def pad_time_series(x, y, min_dif=0.021,cadence=0.02043361, in_mode='reflect', pad_end=False, fill_gaps=True, constant_val=0., len_pad=None):
-
+def pad_time_series(x,y,cadence, in_mode='reflect', pad_end=False, fill_gaps=True, constant_val=0., len_pad=None, small_gap=True):
+    
     padded_y = y
     padded_x = x
 
     truth_array = np.ones_like(x, dtype=bool)
 
+    min_dif = 1.1*cadence
+    
 
     if fill_gaps:
         
-        
         dx = x[1:] - x[:-1]
-        dy = y[1:] - y[:-1]
+        #dy = y[1:] - y[:-1]
         bad_idx = np.arange(len(dx))[dx>min_dif]
         x_add = []
         y_add = []
 
         idx2add = []
         
-
+        biggap_in_mode=in_mode
+        lilgap_in_mode='line'
+        
 
         for j in bad_idx:
 
-            x_add.extend( list(np.arange(x[j]+cadence, x[j+1], cadence) ) )
-            n_add = len(np.arange(x[j]+cadence, x[j+1], cadence))
+            x_add.extend( list(np.arange(x[j]+cadence, x[j+1]-cadence/2, cadence) ) )
+            n_add = int(np.round(dx[j]/cadence))-1
+
 
             idx2add.extend( [j+1]*n_add )
+            
+            if n_add<3:
+                in_mode=lilgap_in_mode
+            else:
+                in_mode=biggap_in_mode
+
 
             if in_mode=='line':
-                y1 = np.median(y[j-10:j])
-                y2 = np.median(y[j:j+10])
-                y_add.extend( list(y1 + ((y2-y1)/dx[j]) * (np.arange(x[j]+cadence, x[j+1], cadence) - x[j] ) ) )
+                y1 = y[j]
+                y2 = y[j+1]
+                
+                y2add = list(y1 + ((y2-y1)/dx[j]) * (np.arange(x[j]+cadence, x[j+1]-cadence/2, cadence) - x[j] ) )
+                
+                
+                y_add.extend( y2add )
 
             elif in_mode=='mean':
                 y_add.extend( [np.mean(y)]*n_add )
@@ -355,19 +396,10 @@ def pad_time_series(x, y, min_dif=0.021,cadence=0.02043361, in_mode='reflect', p
                 else:
                     y_add.extend(  y_negative[range(j,j+n_right)][::-1] )
 
-            elif in_mode=='autoreg':
-
-                y_add.extend( fill_gap_AR(y, n_add, j) )
-
-                
-                if n_add>3:  
-                    y_add.extend( fill_gap_AR(y, n_add, j ) ) 
-                else:
-                    y_add.extend( y[int(j-n_add):int(j)][::-1])
 
 
         if in_mode=='AR':
-            padded_x, padded_y  = fill_all_gaps_AR(x, y, gap_size=3, cadence=cadence)
+            padded_x, padded_y, padded_boo = fill_all_gaps_AR(x,y,cadence=cadence)
             
         else:
             padded_x = np.insert(x, idx2add, x_add    )
@@ -379,11 +411,15 @@ def pad_time_series(x, y, min_dif=0.021,cadence=0.02043361, in_mode='reflect', p
 
         if len_pad is None:
             padded_len = int(2**np.ceil(np.log2(len(padded_x)) )  )
+            if padded_len-len(padded_x)<10:
+                padded_len *=2
         else:
             padded_len = len_pad
 
+        
         total2add = padded_len-len(padded_x)
         add_right =  int(total2add/2)
+
 
         if total2add%2==1:
             add_left = int(total2add/2) + 1
@@ -409,8 +445,6 @@ def pad_time_series(x, y, min_dif=0.021,cadence=0.02043361, in_mode='reflect', p
 def get_transit_depth_ppm(rp, rs):
 
     return 84. * rp**2. / rs**2.
-
-
 
 
 def get_p_tdur_t0(tce):

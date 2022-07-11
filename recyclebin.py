@@ -39,7 +39,7 @@ class RecycleBin(object):
         self.dump = Dump
         self.tces = TCEs
 
-        self.mcmc_tces = TCEs.copy()
+        self.refined_tces = TCEs.copy()
 
         self.exptime = Dump.lc.exptime
         self.limb_coeff = Dump.limb_darkening[0]
@@ -50,49 +50,148 @@ class RecycleBin(object):
         self.raw_flux = self.trend*self.flux
         self.flux_err = Dump.lc.flux_err[Dump.lc.mask]
 
+        self.batman_model, self.batman_params = self._get_batman()
 
 
-    def _update_mcmc_tce(self, tce_num):
+    def _get_tce_mask(self, tce_num):
 
-        #self.mcmc_tce[tce_num] = [0]
+        P,width,t0 = get_p_tdur_t0(self.tces[tce_num])
 
-        return 1.
+        return make_transit_mask(self.time, P, t0, width)
 
-    def _calc_mes(self, tce_num):
 
-        tce = self.tces[tce_num]
 
-        t0 = tce[3]
-        P = tce[1]
-        width = tce[4]
+    def _get_batman(self, limb_law='nonlinear'):
 
-        foldtime = (self.time - t0 + P/2.)%P 
+        params = batman.TransitParams()       #object to store transit parameters
+        params.t0 = self.time[0]              #time of inferior conjunction
+        params.per = 1.                       #orbital period
+        params.rp = 0.1                       #planet radius (in units of stellar radii)
+        params.a = 15.                        #semi-major axis (in units of stellar radii)
+        params.inc = 90.                      #orbital inclination (in degrees)
+        params.ecc = 0.                       #eccentricity
+        params.w = 90.                        #longitude of periastron (in degrees)
+        params.limb_dark = limb_law           #limb darkening model
+        params.u = self.limb_coeff
 
-        width_i = np.argmin(np.abs(width-self.dump.tdurs) )
-        print(width_i, self.dump.tdurs[width_i])
-        num = self.dump.num[width_i]
-        den = self.dump.den[width_i]
+        m = batman.TransitModel(params, self.time, supersample_factor=3, exp_time=self.exptime)
 
-        mestime, mes = calc_mes(foldtime, num,den,P,texp=self.dump.lc.exptime)
+        return m, params
+
+    def _get_lightcurve(self):
+        return self.batman_model.light_curve(self.batman_params)
+
+
+    def _transit_resids(self, par):
+
+        vals = par.valuesdict()
+        b = vals['b']
+        tdur = vals['tdur']
+        t0 = vals['t0']
+        per = vals['per']
+        logdepth = vals['logdepth']
         
-        return mestime-P/2., mes
+        a = 1./np.sin((np.pi*tdur)/per )
+        inc = np.arccos(b/a)*(180./np.pi)
+    
+        self.batman_params.t0 = t0                     
+        self.batman_params.per = per
+        self.batman_params.rp = np.sqrt( 10.**logdepth )      
+        self.batman_params.a =  a
+        self.batman_params.inc = inc
+
+        lc = self._get_lightcurve()
+
+        return (self.flux-lc) / self.flux_err**2.
+
+        
+    
+
+    def _update_tce(self, tce_num, fit_method='leastsq', return_fit=False):
 
 
-    def _get_odd_even_mes(self, tce_num):
+        P,width,t0 = get_p_tdur_t0(self.tces[tce_num])        
+        
+        print(width)
 
-        tce = self.tces[tce_num]
+        
+        params = Parameters()
 
-        t0 = tce[3]
-        width = tce[4]
-        P = tce[1]*2.
+        if P>max(self.time)-min(self.time):
+            params.add('per', value=max(self.time)-min(self.time), vary=False, min=.99*P, max=1.01*P)
+        else:
+            params.add('per', value=P, vary=True, min=.99*P, max=1.01*P)
+        params.add('t0', value=t0, vary=True, min=t0-width, max=t0+width)
+        params.add('tdur', value=width, min=0.25 * width, max=4*width, vary=True)
+        params.add('logdepth', value=-3, vary=True, max=0)
+        params.add('b', value=0.5, vary=True,max=1.2, min=0)
+
+        in_guess = minimize(self._transit_resids, params,method='LBFGS',nan_policy='omit')
+
+        if fit_method=='emcee':
+            emcee_kws = dict(steps=2000, burn=500,
+                             progress=True,nan_policy='omit')
+            tce_out = minimize(self._transit_resids, in_guess.params, method=fit_method , **emcee_kws)
+        else:
+            tce_out = minimize(self._transit_resids, in_guess.params, method=fit_method)
+        out = tce_out.params.valuesdict()
+
+        if P>max(self.time)-min(self.time):
+            self.refined_tces[tce_num,1] = P
+        else:
+            self.refined_tces[tce_num,1] = out['per']
+
+        self.refined_tces[tce_num,2] = 10.**out['logdepth']
+        self.refined_tces[tce_num,3] = out['t0']
+        self.refined_tces[tce_num,4] = out['tdur']
+
+        if return_fit:
+            return tce_out
+
+        
+                
+
+    def _calc_mes(self, tce_num, mask_tces=False, calc_ses=False):
+
+        P,width,t0 = get_p_tdur_t0(self.tces[tce_num])        
+
 
         foldtime = (self.time - t0 + P/4.)%P 
 
         width_i = np.argmin(np.abs(width-self.dump.tdurs) )
+
+        if calc_ses:
+            self.dump.Calculate_SES()
+
         num = self.dump.num[width_i]
         den = self.dump.den[width_i]
 
-        mestime, mes = calc_mes(foldtime, num,den,P,texp=self.dump.lc.exptime,n_trans=1)
+        mask = np.ones_like(foldtime,dtype=bool)
+
+        if mask_tces:
+            for i in range(len(self.tces)):
+                if i!= tce_num:
+                    mask &= self._get_tce_mask(i)
+                    
+
+        mestime, mes = calc_mes(foldtime[mask],num[mask],den[mask],P,texp=self.dump.lc.exptime,n_trans=1.)
+
+        return mestime, (mestime)/P , mes
+
+
+    def _get_odd_even_mes(self, tce_num):
+
+        P,width,t0 = get_p_tdur_t0(self.tces[tce_num])
+        P_twice =P*2.
+        
+
+        foldtime = (self.time - t0 + P_twice/4.)%P_twice 
+
+        width_i = np.argmin(np.abs(width-self.dump.tdurs) )
+        num = self.dump.num[width_i]
+        den = self.dump.den[width_i]
+
+        mestime, mes = calc_mes(foldtime,num,den,P_twice,texp=self.dump.lc.exptime,n_trans=1)
 
         mestime =  mestime/(P/2.) - 0.5
 
@@ -106,76 +205,98 @@ class RecycleBin(object):
         return odd_time, odd_mes, even_time, even_mes, mad(odd_mes), mad(even_mes)
 
 
-    def cosine_vs_transit_local(self, tce_num, showplot=False, nwidth=4):
+    def cosine_vs_transit_local(self, tce_num, showplot=False, nwidth=4,local_plots=False):
 
-        tce = self.tces[tce_num]
+        P,width,t0 = get_p_tdur_t0(self.tces[tce_num])
+        depth = self.refined_tces[tce_num,2]
 
-        t0 = tce[3]
-        width = tce[4]
-        P = tce[1]
+
 
         chit, chic, nf = compare_cosine_and_transit_model(time=self.time,
                                                           flux=self.flux*self.trend,
                                                           t0=t0, width=width, P=P, 
                                                           exptime=self.exptime,
+                                                          depth=depth**0.5,
                                                           limb_dark_coeffs=self.limb_coeff,
                                                           flux_err=self.flux_err,
                                                           plot=showplot, nwidth=nwidth,
-                                                          local_plots=False)
+                                                          local_plots=local_plots)
 
         return chit, chic, nf
 
-    def cosine_vs_transit_global(self, tce_num, showplot=False, nwidth=4):
+    def cosine_vs_transit_global(self, tce_num, showplot=False, nwidth=4, depth=None):
 
-        tce = self.tces[tce_num]
+        P,width,t0 = get_p_tdur_t0(self.refined_tces[tce_num])
+        depth = self.refined_tces[tce_num,2]
 
-        t0 = tce[3]
-        width = tce[4]
-        P = tce[1]
-
-
-        chit, chic, nf = compare_cosine_and_transit_model(time=self.time,
+        chic, chit, nf = compare_cosine_and_transit_model(time=self.time,
                                                           flux=self.flux,
-                                                          t0=t0, width=width, P=P, 
+                                                          t0=t0, width=width, P=P,
+                                                          depth=depth**0.5,
                                                           exptime=self.exptime,
                                                           limb_dark_coeffs=self.limb_coeff,
                                                           flux_err=self.flux_err,
                                                           plot=showplot, nwidth=nwidth,
                                                           local_plots=False,global_fit=True)
 
-        return chit, chic, nf
-
-
-
-
-    def _get_mes_metrics(self, tce_num ):
-
-        tce = self.tces[tce_num]
-
-        t0 = tce[3]
-        width = tce[4]
-        P = tce[1]
+        output = {'global_transit_red_chi2':chit, 'global_cosine_red_chi2':chic, 'global_diff_red_chi2':chit-chic}
         
-        mestime, mes = self._calc_mes(tce_num)
+        return output
+
+
+
+
+    def _get_mes_metrics(self, tce_num , use_mask=True):
+
+        P,width,t0 = get_p_tdur_t0(self.refined_tces[tce_num])
+
+        try:
+            mestime, mesphase, mes = self._calc_mes(tce_num, use_mask)
+        except RuntimeError:
+            self.dump.Calculate_SES()
+            mestime, mesphase, mes = self._calc_mes(tce_num, use_mask)
+            
 
         phase = mestime/P - 0.5
 
         max_mes = np.max(mes)
-        min_mes = np.abs(np.min(mes) )
+        min_mes = np.min(mes) 
         mad_mes = mad(mes)
         mes_over_mad = max_mes/mad_mes
 
+        mes_secondary = np.max(mes[~np.logical_and(mestime>P/4.-2*width,mestime>P/4.-2*width)])
+        
+        
         out_dict = {'max_mes':max_mes, 'min_mes':min_mes, 'mad_mes':mad_mes,
-                    'mes_over_mad':mes_over_mad}
+                    'mes_over_mad':mes_over_mad, 'max_secondary_mes':mes_secondary}
         return out_dict
 
 
 
-    def odd_even_depth_test(self, tec_num):
+    def odd_even_depth_test(self, tce_num, return_dict=False,fit_method='leastsq',):
 
-        
+        P,width,t0 = get_p_tdur_t0(self.refined_tces[tce_num])
 
-        return 1.
+        _, both, even, odd = odd_even_transit_depths(t=self.time,f=self.flux,ferr=self.flux_err,
+                                             P=P,t0=t0,width=width,fit_method='leastsq',
+                                                    initial_fit_method='LBFGS')
+
+
+        if even.errorbars and odd.errorbars:
+            stat = np.abs(odd.params['a']-even.params['a'])/np.sqrt(even.params['a'].stderr**2. + odd.params['a'].stderr**2.)
+        else:
+            print('Odd-Even Test Failed')
+            stat=np.nan
+
+        if return_dict:
+            return {'odd_even_depth_stat':stat,
+                    'odd_depth':odd.params['a'].value,
+                    'even_depth':even.params['a'].value,
+                    'odd_depth_stderr':odd.params['a'].stderr,
+                    'even_depth_stderr':even.params['a'].stderr,
+                    }
+        else:
+            return both, even, odd, stat
 
 
     def odd_even_mes_test(self, tce_num):
@@ -199,26 +320,40 @@ class RecycleBin(object):
 
 
 
-    def local_morphology_test(self, tce_num):
-
+    def local_morphology_test(self, tce_num, **test_kw):
         
-        tce = self.tces[tce_num]
-
-        t0 = tce[3]
-        width = tce[4]
-        P = tce[1]
+        P,width,t0 = get_p_tdur_t0(self.refined_tces[tce_num])
+        depth = self.refined_tces[tce_num,2]
 
         t = self.time
-        f = self.flux
+        f = self.flux * self.trend
         ferr = self.flux_err
+        texp=self.exptime
 
 
-        morph_test = bic_morphology_test(t,f,ferr,P,t0,width,show_plot=False,
-                                         show_progress=True,fit_method='lbfsg',
-                                         mask_detrend=False,min_frac=0.5)
+        morph_test = bic_morphology_test(t,f,ferr,P,t0,width,depth,texp=texp,**test_kw)
 
         
         return morph_test
+
+
+    def get_all_vetting_metrics(self, tce_num):
+
+        self._update_tce(tce_num)
+
+        depth = self.refined_tces[tce_num,2]
+        P,width,t0 = get_p_tdur_t0(self.refined_tces[tce_num])
+
+        result_list =[{'P':P, 'depth_ppt':depth*1e3,'tdur':width,'t0':t0} ,
+                     self._get_mes_metrics(tce_num),
+                     self.odd_even_mes_test(tce_num),
+                     self.odd_even_depth_test(tce_num, True),
+                     self.cosine_vs_transit_global(tce_num,depth=depth),
+                     self.local_morphology_test(tce_num)]
+                     
+        results = {k: v for d in result_list for k, v in d.items()}
+
+        return results
 
 
     
@@ -226,18 +361,19 @@ class RecycleBin(object):
 
 def fit_sinewave(x, y, yerr, p0=None):
     
-    sine_func = lambda x,a,p,x0: a*np.cos((2.*np.pi) * (x-x0) / p) 
-    
-    
+    sine_func = lambda x,c,a,p,x0: c+a*np.cos((2.*np.pi) * (x-x0) / p)
+
     result = curve_fit(sine_func, xdata=x, ydata=y, p0=p0, sigma=yerr, 
-                       bounds=[[-np.inf, p0[1]/3.,-np.inf],[np.inf, p0[1]*4.,np.inf]], 
+                       bounds=[[-np.inf,-np.inf, p0[2]/3.,-np.inf],[np.inf,np.inf, p0[2]*4.,np.inf]], 
               check_finite=True, method='trf', jac=None, )
     
     resids = y - sine_func(x, *result[0])
     
     chi2 = np.sum(resids**2./yerr**2.)
+
+    plot_x = np.linspace(min(x), max(x), 100)
     
-    return chi2, resids, np.sort(x), sine_func(np.sort(x), *result[0])
+    return chi2, resids, plot_x, sine_func(plot_x, *result[0])
     
     
     
@@ -264,10 +400,10 @@ def fit_transit(x,y,yerr,period,limb_darkening,exptime,p0,t0):
         params.t0 = t0
         return m.light_curve(params)-1.
     
-    
+
     result = curve_fit(lc_func, xdata=x, ydata=y, p0=p0, sigma=yerr, absolute_sigma=True, 
                        bounds=[[-8, p0[1]/2., -p0[1]],[0., p0[1]*2., p0[1]]],
-                       check_finite=True, jac=None, method='trf')
+                       check_finite=True, jac=None,)
     
     
     resids = y - lc_func(x, *result[0])
@@ -275,8 +411,12 @@ def fit_transit(x,y,yerr,period,limb_darkening,exptime,p0,t0):
     
     x_fold =(x+period/2.)%period-period/2.
 
+    plot_x = np.linspace(min(x_fold), max(x_fold), 100)
+
     
-    return chi2, resids, np.sort(x_fold), lc_func(x_fold, *result[0] )[np.argsort(x_fold)]
+    m = batman.TransitModel(params, plot_x, exp_time=exptime, fac=0.001, supersample_factor=5)
+    
+    return chi2, resids, plot_x, lc_func(plot_x,  *result[0] )
     
     
     
@@ -284,7 +424,10 @@ def fit_transit(x,y,yerr,period,limb_darkening,exptime,p0,t0):
 
 def compare_cosine_and_transit_model(time,flux,t0,width,P,limb_dark_coeffs,exptime,
                                      flux_err=None,nwidth=4,plot=True,local_plots=False,
-                                     global_fit=False):
+                                     global_fit=False, depth=None):
+
+    if depth is None:
+        depth=1e-3
 
     if global_fit:
         foldtime = (time - t0 + P/2.)%P - P/2.
@@ -296,34 +439,39 @@ def compare_cosine_and_transit_model(time,flux,t0,width,P,limb_dark_coeffs,expti
         transit_flux = flux[mask]-1.
         cosine_flux = flux[mask]-1.
 
-        fluxerr=flux_err[mask]
+        transit_fluxerr=flux_err[mask]
+        cosine_fluxerr=flux_err[mask]
 
 
     else:
         transit_time,cosine_time,transit_flux,cosine_flux,fluxerr,_ = get_local_cosine_and_transit_fits(time, flux, t0, width, P, limb_dark_coeffs, flux_err=flux_err, nwidth=nwidth, show_plots=local_plots)
 
     
-    trim_to_width = np.abs(transit_time)< nwidth*width/2.
-    transit_time = transit_time[trim_to_width]
-    transit_flux = transit_flux[trim_to_width]
+        trim_to_width = np.abs(transit_time)< nwidth*width/2.
+        transit_time = transit_time[trim_to_width]
+        transit_flux = transit_flux[trim_to_width]
     
-    trim_to_width_cos = np.abs(cosine_time)< nwidth*width/2.
-    cosine_time = cosine_time[trim_to_width_cos]
-    cosine_flux = cosine_flux[trim_to_width_cos]
-    
+        trim_to_width_cos = np.abs(cosine_time)< nwidth*width/2.
+        cosine_time = cosine_time[trim_to_width_cos]
+        cosine_flux = cosine_flux[trim_to_width_cos]
+
+        transit_fluxerr = fluxerr[trim_to_width]        
+        cosine_fluxerr = fluxerr[trim_to_width_cos]
+
+        
     sine_chi2s = []
     all_sine_results = []
     for n in [0.5,1,2]:
-        results = fit_sinewave(cosine_time, cosine_flux, yerr=fluxerr[trim_to_width_cos],p0=[1e-4, n*width,0.])  
+        results = fit_sinewave(cosine_time, cosine_flux, yerr=cosine_fluxerr,p0=[0., depth, n*width,0.])  
         sine_chi2s.append(results[0])
         all_sine_results.append(results)
         
     
     sine_chi2, sine_resids, sine_x, sine_y = all_sine_results[np.argmin(sine_chi2s)]
 
-    
-    tran_chi2, tran_resids, tran_x, tran_y = fit_transit(transit_time, transit_flux, yerr=fluxerr[trim_to_width], 
-                                                         p0=[-5,width,0.], t0=0.,
+
+    tran_chi2, tran_resids, tran_x, tran_y = fit_transit(transit_time, transit_flux, yerr=transit_fluxerr, 
+                                                         p0=[np.log10(depth),width,0.], t0=0.,
                                                          period=P,limb_darkening=limb_dark_coeffs,
                                                          exptime=exptime)
     
@@ -362,12 +510,12 @@ def compare_cosine_and_transit_model(time,flux,t0,width,P,limb_dark_coeffs,expti
         
         
         ax1.plot(sine_x, sine_y, '-', color='tomato', lw=2, 
-                 label='$\mathregular{\chi^2_{\\nu, cosine}}=$'+'{:.4f}'.format(sine_chi2))
-        ax1.legend(framealpha=0., loc='lower center')
+                 label='$\mathregular{\chi^2_{\\nu, sine}}$'+'\n={:.3f}'.format(sine_chi2))
+        ax1.legend(framealpha=0., loc='lower right')
         
         ax3.plot(tran_x, tran_y, '-', color='tomato', lw=2, 
-                 label='$\mathregular{\chi^2_{\\nu, transit}}=$'+'{:.4f}'.format(tran_chi2))
-        ax3.legend(framealpha=0., loc='lower center')
+                 label='$\mathregular{\chi^2_{\\nu, tran}}$'+'\n={:.3f}'.format(tran_chi2))
+        ax3.legend(framealpha=0., loc='lower right')
         
         
         ax2.plot(cosine_time, sine_resids, '.', color='0.7',markersize=2)
@@ -391,7 +539,7 @@ def compare_cosine_and_transit_model(time,flux,t0,width,P,limb_dark_coeffs,expti
 
 
         plt.tight_layout()
-        plt.show()
+#        plt.show()
         
     nfreedom = len(transit_time) - 3.
         
@@ -405,7 +553,7 @@ def get_local_cosine_and_transit_fits(time, flux, t0, width, P, limb_dark_coeffs
     
     
     if flux_err is None:
-        flux_err = np.ones(len(flux))
+        flux_err = np.ones(len(flux))*np.nanstd(flux)
         
     i=0
     
@@ -434,10 +582,10 @@ def get_local_cosine_and_transit_fits(time, flux, t0, width, P, limb_dark_coeffs
             
             try:
                 c_result = fit_cosine_local_poly(x=time_seg, y=flux_seg, yerr=fluxerr_seg,
-                                               p0=[0,0,0,-0.,width,t0])
+                                               p0=[1.,0,0,0.,width,t0])
 
                 t_result = fit_transit_local_poly(x=time_seg, y=flux_seg,yerr=fluxerr_seg,
-                                                  t0=t0,width=width,p0=[0,0,0,-2,t0],
+                                                  t0=t0,width=width,p0=[1.,0,0,-3,t0],
                                                   limb_darkening=limb_dark_coeffs)
 
 
@@ -474,9 +622,9 @@ def fit_cosine_local_poly(x,y,yerr,p0):
     all_chi2 = []
     all_fitpar = []
     for n in [0.5,1]:
-        fitfunc = lambda x,a0,a1,a2,amp,per,t0: a0 + a1*x +a2*x**2. + amp*np.cos(2*np.pi*(x-t0)/per)
+        fitfunc = lambda x,a0,a1,a2,amp,per,t0: (a0 + a1*x +a2*x**2.) + amp*np.cos(2*np.pi*(x-t0)/per)
         a0,a1,a2,amp,per,t0 = p0
-        p0_n = a0,a1,a2,amp,per*n,t0
+        p0_n = [a0,a1,a2,amp,per*n,t0]
         fit_par, fit_var = curve_fit(fitfunc, xdata=x, ydata=y, sigma=yerr, p0=p0_n,
                                     bounds=[[-np.inf,-np.inf,-np.inf,-np.inf, n*per/2.,
                                              t0-per/10.],
@@ -513,7 +661,7 @@ def fit_transit_local_poly(x,y,yerr,p0,t0,width,limb_darkening,exptime=0.0204):
         a0,a1,a2,rprs,t_0 = par
         params.rp = 10.**rprs  
         params.t0 = t_0
-        return  a0 +a1*t + a2*t**2. + m.light_curve(params)-1.        
+        return  (a0 +a1*t + a2*t**2.) *  m.light_curve(params)      
             
     fit_par, fit_var = curve_fit(lc_func, xdata=x, ydata=y, sigma=yerr, p0=p0,
                                 bounds=[[-np.inf, -np.inf,-np.inf,-8,t0-width/10.],
@@ -529,20 +677,50 @@ def fit_transit_local_poly(x,y,yerr,p0,t0,width,limb_darkening,exptime=0.0204):
 
 
 
-def check_minmax_mes(foldtime, mes, tdur, delta_t0=0.):
+def odd_even_transit_depths(t,f,ferr,P,t0,width,initial_fit_method='LBFGS',
+                            fit_method='leastsq'):
+
+
+    phase = (t-t0 + P/4)%(2*P) 
+
+    odd = phase<P
+    even = phase>=P
+
+    odd_flux = f[odd]
+    odd_phase = phase[odd]
+    
+    even_flux = f[even]
+    even_phase = phase[even]-P
     
 
-
-    return 1.
+    
+    bothparams = Parameters()
+    bothparams.add('t0', value=0.25*P, vary=True,min=0.2*P,max=0.3*P)
+    bothparams.add('a', value=1e-3, vary=True, min=1e-8, max=.99)
+    bothparams.add('b', value=1e3, vary=True, min=0, max=np.inf)
+    bothparams.add('tdur', value=width, min=0.5 * width, max=2*width, vary=True)
+    bothparams.add('c0', value=1., vary=True,)
+    bothparams.add('c1', value=0., vary=False)
+    bothparams.add('c2', value=0., vary=False)
 
     
 
+    initresult = minimize(trap_residual, bothparams,
+                          args=(phase%P, f, ferr), method=initial_fit_method)
+
+    bothresult =  minimize(trap_residual, initresult.params,
+                          args=(phase%P, f, ferr),method=fit_method)
+
+    bothresult.params['b'].vary=False
+    
+    evenresult = minimize(trap_residual, bothresult.params,
+                          args=(even_phase, even_flux, ferr[even]),method=fit_method)
+
+    oddresult = minimize(trap_residual, bothresult.params,
+                          args=(odd_phase, odd_flux, ferr[odd]),method=fit_method)
 
 
-def odd_even_transit_depths():
-
-
-    return 1.
+    return phase, bothresult, evenresult, oddresult
 
 
 
@@ -550,39 +728,40 @@ def odd_even_transit_depths():
 
 
 
-def bic_morphology_test(t, f, ferr, P, t0, tdur, fit_method='leastsq', ntdur=2,texp=0.0204,
-                        show_plot=False,min_frac=0.8,show_progress=True,mask_detrend=True):
+
+def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS', ntdur=4,texp=0.0204,
+                        show_plot=False,min_frac=0.8,show_progress=True,mask_detrend=False):
 
     
     boxparams = Parameters()
-    boxparams.add('a', value=1e-4, min=0.)
+    boxparams.add('a', value=depth, min=0.)
     boxparams.add('t0', value=0., vary=True, min=-2*tdur, max=2*tdur )
-    boxparams.add('tdur', value=tdur*0.75, vary=True, min=.5*tdur, max=1.5*tdur)
+    boxparams.add('tdur', value=tdur*0.75, vary=True, min=.5*tdur, max=2*tdur)
     boxparams.add('c0', value=np.median(f), vary=True)
 
 
 
     jumpparams = Parameters()
-    jumpparams.add('a', value=1e-4, max=1e-3)
-    jumpparams.add('t0', value=-tdur/2., vary=True, min=-2*tdur, max=2*tdur  )
+    jumpparams.add('a', value=depth, max=1e-2)
+    jumpparams.add('t0', value=-0., vary=True, min=-2*tdur, max=2*tdur  )
     jumpparams.add('c0', value=np.median(f), vary=True)
 
 
 
     spsdparams = Parameters()
-    spsdparams.add('a', value=1e-4, max=0.5, min=0. )
+    spsdparams.add('a', value=depth, max=0.5, min=0. )
     spsdparams.add('d', value=2, min=1, max=100)
-    spsdparams.add('t0', value=-tdur/2., vary=True, min=-tdur, max=tdur/2.  )
-    spsdparams.add('tdur', value=tdur, vary=True, min=-2*tdur, max=2*tdur  )
+    spsdparams.add('t0', value=-tdur/4., vary=True, min=-tdur, max=tdur  )
+    spsdparams.add('tdur', value=tdur, vary=True, min=0, max=2*tdur  )
     spsdparams.add('c0', value=np.median(f), vary=True)
 
 
 
 
     sineparams = Parameters()
-    sineparams.add('a', value=1e-4, max=0.5, min=0. )
+    sineparams.add('a', value= depth, max=0.5, min=0. )
     sineparams.add('t0', value=0., vary=True, min=-tdur, max=tdur  )
-    sineparams.add('tdur', value=tdur/2., vary=True, min=tdur/8., max=2*tdur  )
+    sineparams.add('tdur', value=tdur/4., vary=True, min=tdur/8., max=2*tdur  )
     sineparams.add('c0', value=np.median(f), vary=True)
     
 
@@ -629,44 +808,57 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, fit_method='leastsq', ntdur=2,t
     sine_aic_probs = []
 
 
-    n_transits = int(np.floor( (t[-1]-t[0])/P))
-
     num_good_transits = 0
     frac_good_transit_points=0
 
-    if show_progress:
-        transit_iterable = tqdm(range(int(n_transits)) )
-    else:
-        transit_iterable=range(int(n_transits))
-    
-    for N in transit_iterable:
-    
-        t_min, t_max = t0 + N*P - ntdur*tdur, t0 + N*P + ntdur*tdur
 
-        t_n = t0 + N*P
+    n_transits=0
+    tn=t0
 
+
+    if show_plot:
+        transit_labels=[]
+        tce_times = []
+        tce_fluxes = []
+        tce_errs=[]
+        
+        plot_times=[]
+        spsd_fits = []
+        box_fits = []
+        jump_fits = []
+        sine_fits = []
+    
+    while tn < max(t):
+
+        t_min, t_max = tn - ntdur*tdur, tn + ntdur*tdur
+        
         tce_cut = np.logical_and(t>t_min, t<t_max)
     
-        tce_time = t[tce_cut] - t_n
+        tce_time = t[tce_cut] - tn
         tce_flux = f[tce_cut]
-        tce_err = ferr[tce_cut]        
+        tce_err = ferr[tce_cut]
+
+        n_transits+=1
+        tn+=P
     
-        if sum(tce_cut)<min_frac*(4*tdur/texp):
-            frac_good_transit_points += sum(tce_cut)/(4*tdur/texp)
+        if sum(tce_cut)<min_frac*(2*ntdur*tdur/texp):
+            frac_good_transit_points += sum(tce_cut)/(2*ntdur*tdur/texp)
             continue
 
+
+        
         num_good_transits+=1
-        frac_good_transit_points += sum(tce_cut)/(4*tdur/texp)
+        frac_good_transit_points += sum(tce_cut)/(2*ntdur*tdur/texp)
     
 
         box_out = minimize(box_residual, boxparams, args=(tce_time, tce_flux, tce_err),
-                       method=fit_method)
+                           method=fit_method,)
         jump_out = minimize(jump_residual, jumpparams, args=(tce_time, tce_flux, tce_err),
-                        method=fit_method)
+                            method=fit_method,)
         spsd_out = minimize(spsd_residual, spsdparams, args=(tce_time, tce_flux, tce_err),
-                        method=fit_method)
+                            method=fit_method,)
         sine_out = minimize(sine_residual, sineparams, args=(tce_time, tce_flux, tce_err),
-                        method=fit_method)
+                            method=fit_method,)
 
 
             
@@ -682,43 +874,84 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, fit_method='leastsq', ntdur=2,t
 
         if show_plot:
             plot_time = np.linspace(min(tce_time), max(tce_time), 500)
+            plot_times.append(plot_time)
+            tce_times.append(list(tce_time))
+            tce_fluxes.append(tce_flux)
+            tce_errs.append(tce_err)
 
-            plt.errorbar(tce_time, tce_flux, yerr=tce_err, fmt='.', color='k', ecolor='0.5')
+            box_fits.append( box_residual(box_out.params, plot_time) )
+            spsd_fits.append( spsd_residual(spsd_out.params, plot_time) )
+            jump_fits.append( jump_residual(jump_out.params, plot_time) )
+            sine_fits.append( sine_residual(sine_out.params, plot_time) )
 
-            plt.plot(plot_time, box_residual(box_out.params, plot_time), '-' , zorder=2,
-                 label='bic: ${:.2f}$\naic: ${:.2f}$'.format(box_out.bic,box_out.aic))
-            plt.plot(plot_time, jump_residual(jump_out.params, plot_time), '-' , zorder=2,
-                label='bic: ${:.2f}$\naic: ${:.2f}$'.format(jump_out.bic,jump_out.aic))
-            plt.plot(plot_time, spsd_residual(spsd_out.params, plot_time), '-' , zorder=2,
-                label='bic: ${:.2f}$\naic: ${:.2f}$'.format(spsd_out.bic,spsd_out.aic))
-            plt.plot(plot_time, sine_residual(sine_out.params, plot_time), '-' , zorder=2,
-                label='bic: ${:.2f}$\naic: ${:.2f}$'.format(spsd_out.bic,spsd_out.aic))
-        
-            plt.title('transit {}'.format(N))
-            plt.legend(ncol=2)
-            plt.xlabel('$\mathregular{\Delta t_0}$')
-            plt.ylabel('flux')
-            plt.show()
+            transit_labels.append(n_transits)
+
+    if show_plot:
+
+        def get_ppt(x):
+            return (x-np.median(x))/np.median(x)*1e3
 
 
+        for i in range(len(transit_labels)):
+
+            snum = int(np.sqrt(len(transit_labels))+1)
+
+
+            if i==0:
+                plt.figure(figsize=(snum*2.5,snum*2.) )
+                
+            
+            ax = plt.subplot(snum,snum,i+1)
+
+            if i%snum==0:
+                ax.set_ylabel(r'$\mathregular{\delta F/F }$ [ppt]')
+
+            ax.set_xlabel(r'$\mathregular{\Delta t_0}$ [day]')
+
+            plot_time=plot_times[i]
+            ax.errorbar(tce_times[i], get_ppt(tce_fluxes[i]), yerr=1e3*tce_errs[i], fmt='.', color='k', ecolor='0.5')
+
+            l1, = ax.plot(plot_time, get_ppt(box_fits[i]), '-' , zorder=2,
+                    label='box')
+            l2, = ax.plot(plot_time, get_ppt(jump_fits[i]), '-' , zorder=2,
+                    label='jump')
+            l3, = ax.plot(plot_time, get_ppt(spsd_fits[i]), '-' , zorder=2,
+                    label='spsd')
+            l4, = ax.plot(plot_time, get_ppt(sine_fits[i]), '-' , zorder=2,
+                    label='sine')
+
+            
+            ax.text(0.15,0.1,'{}'.format(transit_labels[i]),ha='center',va='bottom',transform=ax.transAxes)
+
+        ax = plt.subplot(snum,snum,i+2)
+        ax.legend([l1,l2,l3,l4], ['box','jump','spsd','sine'], ncol=1, loc='upper left')
+        ax.axis('off')
+    
+            #plt.xlabel('$\mathregular{\Delta t_0}$')
+
+            #plt.ylabel('flux')
+        plt.tight_layout()
+        #plt.show()
+
+            
 
     output_dict = {'num_transits': n_transits,
                    'num_good_transits':num_good_transits,
                    'frac_avg_points_in_transit': frac_good_transit_points/n_transits,
-                   'spsd_mean_bic_stat':np.mean(spsd_bic_probs),
-                   'spsd_mean_aic_stat':np.mean(spsd_aic_probs),
-                   'spsd_median_bic_stat':np.median(spsd_bic_probs),
-                   'spsd_median_aic_stat':np.median(spsd_aic_probs),
-                   'spsd_bic_stat':np.sum(spsd_bic_probs),
-                   'spsd_aic_stat':np.sum(spsd_aic_probs),
-                   'jump_mean_bic_stat':np.mean(jump_bic_probs),
-                   'jump_mean_aic_stat':np.mean(jump_aic_probs),
+                   #'jump_mean_bic_stat':np.mean(jump_bic_probs),
+                   #'jump_mean_aic_stat':np.mean(jump_aic_probs),
                    'jump_median_bic_stat':np.median(jump_bic_probs),
                    'jump_median_aic_stat':np.median(jump_aic_probs),
                    'jump_bic_stat':np.sum(jump_bic_probs),
                    'jump_aic_stat':np.sum(jump_aic_probs),
-                   'sine_mean_bic_stat':np.mean(sine_bic_probs),
-                   'sine_mean_aic_stat':np.mean(sine_aic_probs),
+                   #'spsd_mean_bic_stat':np.mean(spsd_bic_probs),
+                   #'spsd_mean_aic_stat':np.mean(spsd_aic_probs),
+                   'spsd_median_bic_stat':np.median(spsd_bic_probs),
+                   'spsd_median_aic_stat':np.median(spsd_aic_probs),
+                   'spsd_bic_stat':np.sum(spsd_bic_probs),
+                   'spsd_aic_stat':np.sum(spsd_aic_probs),
+                   #'sine_mean_bic_stat':np.mean(sine_bic_probs),
+                   #'sine_mean_aic_stat':np.mean(sine_aic_probs),
                    'sine_median_bic_stat':np.median(sine_bic_probs),
                    'sine_median_aic_stat':np.median(sine_aic_probs),
                    'sine_bic_stat':np.sum(sine_bic_probs),
@@ -728,6 +961,14 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, fit_method='leastsq', ntdur=2,t
 
 
 
+
+
+
+def weak_secondary_test(tce, f, ferr):
+
+    
+    
+    return 1.
 
 
 

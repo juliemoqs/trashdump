@@ -1,15 +1,188 @@
-import sys
 
 from .utils import *
 from .dump import *
+from .ses import calc_var_stat
+
+import numpy as np
 import wotan
 import warnings
+from astropy.io import fits
 
 
-filepath = path.abspath(__file__)
-dir_path = path.dirname(filepath)
 
-TRASH_DATA_DIR = dir_path+'/'
+#filepath = path.abspath(__file__)
+#dir_path = path.dirname(filepath)
+
+#TRASH_DATA_DIR = dir_path+'/'
+
+
+
+
+
+
+
+
+
+    
+class LightCurve(object):
+
+    def __init__(self, time, flux, flux_err, ID, flags=None, mask=None, trend=None, mission='KEPLER', segment_dates=None, qflags=None):
+        
+        self.time = time
+        self.flux = flux
+        self.flux_err = flux_err
+        self.ID = ID
+
+        if flags is None:
+            self.flags = np.zeros(len(self.time) )
+        else:
+            self.flags = flags
+
+        if mask is None:
+            self.mask = np.ones(len(self.time), dtype=bool)
+        else:
+            self.mask = mask
+
+        if type(trend) == None:
+            self.trend = np.ones(len(self.time), dtype=float)
+        else:
+            self.trend = trend
+            
+        self.mission = mission
+        self.exptime = np.nanmedian(time[1:]-time[:-1])
+
+
+        if qflags is None:
+            if mission=='KEPLER':
+                qflags = [1,2,3,4,6,7,8,9,11,12,13,15,16,17,]
+            
+            elif mission=='TESS':
+                qflags = [1,2,3,4,5,6,8,12]
+                
+        self.qflags=qflags
+        
+        self.mask &= self._make_bitmask()
+
+        self.segment_dates = segment_dates
+
+        
+    def mask_bad_gap_edges(self, sig=3.0, edge_cut=1., min_dif=0.2, npoints=10):
+
+        mask = self.mask.copy()
+        _, _, edge_mask = flag_gap_edges(self.time[mask], self.flux[mask], min_dif=min_dif, sig=sig,gap_size=edge_cut, npoints=npoints )
+        
+        self.mask[mask] = edge_mask
+        
+    def _make_bitmask(self, qflags=None):
+        
+        if qflags is None:
+            qflags = self.qflags
+        
+        good_guys = self.mask
+        
+        quality_mask =  np.sum(2 ** (np.array(qflags)-1) )
+        good_guys &= (self.flags & quality_mask) == 0
+        
+        good_guys &= ~np.isnan(self.flux)
+        
+        return good_guys
+        
+        
+
+    def mask_badguys(self, sig=5., qflags=None):
+
+        good_guys = self._make_bitmask(qflags)
+        self._mask_outliers(nsigma=sig)
+        self.mask &= good_guys
+        
+
+    def flatten(self, wotan_kw):
+
+        self.flux, self.trend = detrend_lc(self.time, self.flux,  mask=self.mask, **wotan_kw)
+        self.flux_err = self.flux_err/self.trend
+        
+        
+    def _mask_outliers(self, window=2., nsigma=5., n_mad_window=100_000):
+
+        zero_flux = self.flux.copy() - np.median(self.flux[self.mask])
+        zero_flux[~self.mask] = np.nan
+
+        mad_estimate_mask = np.sqrt(calc_var_stat(zero_flux[self.mask],window_size=window, method='mad',n_mad_window=n_mad_window, exp_time=self.exptime), )
+        mad_estimate = np.interp(self.time, self.time[self.mask], mad_estimate_mask)
+        
+        #mad_estimate[np.isnan(mad_estimate)]=np.median(mad_estimate)
+        
+        pos_outliers = zero_flux > nsigma * mad_estimate
+        neg_outliers = zero_flux < -nsigma * mad_estimate
+        bad_flux = self.flux<0.
+
+        
+        neg_out_ind = np.arange(len(zero_flux))[neg_outliers]
+        negout_times = self.time[neg_out_ind]
+
+        for i in neg_out_ind:
+
+            t_i = self.time[i]
+            n_close_points = np.sum( np.abs(negout_times-t_i)<5*self.exptime )
+            
+            if n_close_points>1 or np.abs(zero_flux[i]-np.nanmedian(zero_flux[i-4:i+4]))<nsigma*2.*mad_estimate[i]:
+                neg_outliers[i] = False
+
+
+        outlier_mask = ~pos_outliers
+        outlier_mask &= ~neg_outliers
+        outlier_mask &= ~bad_flux
+        outlier_mask &= ~np.isnan(zero_flux)
+
+        self.mask &= outlier_mask
+        
+        return outlier_mask
+        
+
+
+
+
+# Object to read in eleanor ffi light curve
+class EleanorFFI(object):
+    
+    def __init__(self, fpath,lite=True):
+        
+        hdul=fits.open(fpath, mmap=False)
+        self.lc_hdr = hdul[0].header
+        self.lc = hdul[1].data
+        self.tic = self.lc_hdr['TIC_ID']
+        
+        t_i, t_f = self.lc_hdr['TSTART'], self.lc_hdr['TSTOP']
+        
+        self.sector_dates = [t_i, 0.5*(t_i+t_f), t_f]
+        
+
+    def get_LightCurve(self, qflags=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
+                                     16,17,18,19,20] ): 
+        
+        lc=self.lc
+        time = np.array(lc['TIME'])
+        flux = np.array(lc['CORR_FLUX'])
+        flux_err = np.array(lc['FLUX_ERR'])
+        flags = np.array(lc['QUALITY'])
+        
+        transitsearch_lightcurve = LightCurve(time = time, flux = flux,
+                                              flux_err = flux_err,
+                                              flags = flags, qflags=qflags,
+                                              mission='TESS', ID=self.tic,
+                                              segment_dates=self.sector_dates)
+        
+        
+
+        
+        return transitsearch_lightcurve
+
+
+
+
+
+
+
 
 # Object to read in single Quarter light curve files from Kepler
 class single_quarter_lc(object):    
@@ -609,12 +782,6 @@ class TESS_30minData(object):
 
 
 
-    def _get_TrIC_Data(self, TrIC_file):
-
-        data=1.
-        return data
-
-
 
     def make_Transitsearch_LightCurve(self, **wotan_kw):
 
@@ -647,7 +814,8 @@ class TESS_30minData(object):
         
         transitsearch_lightcurve = LightCurve(time = time, flux = flux,
                                               flux_err = flux_err,
-                                              trend = trend, mask=nan_mask, flags = flags,
+                                              trend = trend, mask=nan_mask,
+                                              flags = flags,
                                               mission='TESS', ID=self.tic,
                                               segment_dates=sector_dates)
 
@@ -655,11 +823,32 @@ class TESS_30minData(object):
     
     
     
-def flatten_lc(time, pdcsap, window, method='biweight'):
+def flatten_lc(time, flux, window, method='biweight'):
 
-    return flatten(time, pdcsap, window_length=window, method=method, return_trend=True)
+    return flatten(time, flux, window_length=window, method=method, return_trend=True)
 
 
+
+
+def detrend_lc(time, flux, mask=None, **wotan_kw):
+    
+    if mask is None:
+        detrended_flux, trend = flatten(time, flux, return_trend=True, **wotan_kw)
+        
+    else:
+        masked_time, masked_flux = time[mask], flux[mask]
+        detrended_masked_flux, masked_trend = flatten(masked_time, masked_flux, return_trend=True, **wotan_kw)
+        
+        detrended_flux = np.ones_like(flux)
+        detrended_flux[mask] = detrended_masked_flux
+        detrended_flux[~mask] = np.nan
+        
+        trend = np.ones_like(flux)
+        trend[mask]=masked_trend
+        trend[~mask] = np.nan
+        
+    
+    return detrended_flux, trend
 
 
 
