@@ -8,9 +8,9 @@ import pywt
 import batman
 
 
-def ocwt(x, max_level=14):
+def ocwt(x, max_level=15):
     level = min(max_level, np.log2(len(x))-1 )
-    return np.array(pywt.swt(x, 'haar', trim_approx=True, norm=True, level=level) )[::-1]
+    return np.array(pywt.swt(x, 'db2', trim_approx=True, norm=True, level=level) )[::-1]
 
 
     
@@ -97,7 +97,7 @@ def calc_var_stat(x, window_size, exp_time, method='mad',
 
 
     
-def get_whitening_coeffs(t, x, window_size, exp_time=0.020417, method='mad',
+def get_whitening_coeffs(t, x, window_size,exp_time=0.020417,method='mad',
                   slat_frac=0.2, n_mad_window=51):
 
 
@@ -154,7 +154,7 @@ def calc_mes(fold_time, num, den, P, n_trans=2, texp=0.0204, norm=False):
 
     n_transits = histogram1d(fold_time, bins=nbins, range=bin_range)
     
-    transit_cut = n_transits>=n_trans
+    transit_cut = n_transits<n_trans
     
     mes = num_binned / np.sqrt(den_binned)
 
@@ -162,7 +162,8 @@ def calc_mes(fold_time, num, den, P, n_trans=2, texp=0.0204, norm=False):
         mes -= np.nanmedian(mes)
         mes/=mad(mes[~np.isnan(mes)])
     
-    mes[~transit_cut] = 0.
+    mes[transit_cut] = 0.
+    #mes[n_transits==0]=np.nan
     
     return bin_edge, mes
 

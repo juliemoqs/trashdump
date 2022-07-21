@@ -112,9 +112,6 @@ class RecycleBin(object):
 
         P,width,t0 = get_p_tdur_t0(self.tces[tce_num])        
         
-        print(width)
-
-        
         params = Parameters()
 
         if P>max(self.time)-min(self.time):
@@ -151,32 +148,27 @@ class RecycleBin(object):
         
                 
 
-    def _calc_mes(self, tce_num, mask_tces=False, calc_ses=False):
+    def _calc_mes(self, tce_num, mask_tce=False, calc_ses=False):
 
         P,width,t0 = get_p_tdur_t0(self.tces[tce_num])        
-
-
-        foldtime = (self.time - t0 + P/4.)%P 
-
         width_i = np.argmin(np.abs(width-self.dump.tdurs) )
 
+        mask = self.dump.lc.mask.copy()
+
+        if mask_tce:
+            mask &= make_transit_mask(self.dump.lc.time, P, t0, width*1.5)
+
         if calc_ses:
-            self.dump.Calculate_SES()
+            self.dump.Calculate_SES_by_Segment(mask=mask, tdurs=[width])
 
-        num = self.dump.num[width_i]
-        den = self.dump.den[width_i]
+        num = self.dump.num[0]
+        den = self.dump.den[0]
+        
+        foldtime = (self.dump.lc.time.copy() - t0 + P/4.)%P 
+        
+        mestime, mes = calc_mes(foldtime[mask],num,den,P,texp=self.dump.lc.exptime,n_trans=1.)
 
-        mask = np.ones_like(foldtime,dtype=bool)
-
-        if mask_tces:
-            for i in range(len(self.tces)):
-                if i!= tce_num:
-                    mask &= self._get_tce_mask(i)
-                    
-
-        mestime, mes = calc_mes(foldtime[mask],num[mask],den[mask],P,texp=self.dump.lc.exptime,n_trans=1.)
-
-        return mestime, (mestime)/P , mes
+        return mestime-P/4., (mestime)/P , mes
 
 
     def _get_odd_even_mes(self, tce_num):
@@ -205,6 +197,26 @@ class RecycleBin(object):
         return odd_time, odd_mes, even_time, even_mes, mad(odd_mes), mad(even_mes)
 
 
+    def weak_secondary_test(self, tce_num):
+
+        mestime, mesphase, mes = self._calc_mes(tce_num,calc_ses=True,mask_tce=True)
+        
+        max_secondary_mes = np.nanmax(mes)
+        max_secondary_phase = mesphase[np.nanargmax(mes)]
+        min_secondary_mes = np.nanmin(mes)
+        min_secondary_phase = mesphase[np.nanargmin(mes)]
+        mad_secondary_mes = mad(mes)
+        
+
+        output = {'max_secondary_mes': max_secondary_mes,
+                  'max_secondary_mes_phase': max_secondary_phase,
+                  'min_secondary_mes': min_secondary_mes,
+                  'min_secondary_mes_phase':min_secondary_phase,
+                  'mad_secondary_mes':mad_secondary_mes
+                  }
+        
+        return output
+    
     def cosine_vs_transit_local(self, tce_num, showplot=False, nwidth=4,local_plots=False):
 
         P,width,t0 = get_p_tdur_t0(self.tces[tce_num])
@@ -246,7 +258,7 @@ class RecycleBin(object):
 
 
 
-    def _get_mes_metrics(self, tce_num , use_mask=True):
+    def _get_mes_metrics(self, tce_num , use_mask=False):
 
         P,width,t0 = get_p_tdur_t0(self.refined_tces[tce_num])
 
@@ -346,10 +358,11 @@ class RecycleBin(object):
 
         result_list =[{'P':P, 'depth_ppt':depth*1e3,'tdur':width,'t0':t0} ,
                      self._get_mes_metrics(tce_num),
-                     self.odd_even_mes_test(tce_num),
+                      self.weak_secondary_test(tce_num),
+                     #self.odd_even_mes_test(tce_num),
                      self.odd_even_depth_test(tce_num, True),
                      self.cosine_vs_transit_global(tce_num,depth=depth),
-                     self.local_morphology_test(tce_num)]
+                      self.local_morphology_test(tce_num)]
                      
         results = {k: v for d in result_list for k, v in d.items()}
 
@@ -729,8 +742,9 @@ def odd_even_transit_depths(t,f,ferr,P,t0,width,initial_fit_method='LBFGS',
 
 
 
-def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS', ntdur=4,texp=0.0204,
-                        show_plot=False,min_frac=0.8,show_progress=True,mask_detrend=False):
+def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
+                        ntdur=4,texp=0.0204,show_plot=False,min_frac=0.8,
+                        show_progress=True,mask_detrend=False):
 
     
     boxparams = Parameters()
@@ -799,14 +813,10 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
 
 
     jump_bic_probs = []
-    jump_aic_probs = []
 
     spsd_bic_probs = []
-    spsd_aic_probs = []
 
     sine_bic_probs = []
-    sine_aic_probs = []
-
 
     num_good_transits = 0
     frac_good_transit_points=0
@@ -863,13 +873,13 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
 
             
         jump_bic_probs.append( (box_out.bic-jump_out.bic)/2.) 
-        jump_aic_probs.append(  (box_out.aic-jump_out.aic)/2.) 
+        #jump_aic_probs.append(  (box_out.aic-jump_out.aic)/2.) 
     
         spsd_bic_probs.append( (box_out.bic-spsd_out.bic)/2.) 
-        spsd_aic_probs.append(  (box_out.aic-spsd_out.aic)/2.) 
+        #spsd_aic_probs.append(  (box_out.aic-spsd_out.aic)/2.) 
     
         sine_bic_probs.append( (box_out.bic-sine_out.bic)/2.) 
-        sine_aic_probs.append(  (box_out.aic-sine_out.aic)/2.) 
+        #sine_aic_probs.append(  (box_out.aic-sine_out.aic)/2.) 
 
 
         if show_plot:
@@ -941,21 +951,22 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
                    #'jump_mean_bic_stat':np.mean(jump_bic_probs),
                    #'jump_mean_aic_stat':np.mean(jump_aic_probs),
                    'jump_median_bic_stat':np.median(jump_bic_probs),
-                   'jump_median_aic_stat':np.median(jump_aic_probs),
+                   'jump_min_bic_stat':np.min(jump_bic_probs),
                    'jump_bic_stat':np.sum(jump_bic_probs),
-                   'jump_aic_stat':np.sum(jump_aic_probs),
+                   #'jump_aic_stat':np.sum(jump_aic_probs),
                    #'spsd_mean_bic_stat':np.mean(spsd_bic_probs),
                    #'spsd_mean_aic_stat':np.mean(spsd_aic_probs),
                    'spsd_median_bic_stat':np.median(spsd_bic_probs),
-                   'spsd_median_aic_stat':np.median(spsd_aic_probs),
+                   'spsd_min_bic_stat':np.min(spsd_bic_probs),
                    'spsd_bic_stat':np.sum(spsd_bic_probs),
-                   'spsd_aic_stat':np.sum(spsd_aic_probs),
+                   #'spsd_aic_stat':np.sum(spsd_aic_probs),
                    #'sine_mean_bic_stat':np.mean(sine_bic_probs),
                    #'sine_mean_aic_stat':np.mean(sine_aic_probs),
                    'sine_median_bic_stat':np.median(sine_bic_probs),
-                   'sine_median_aic_stat':np.median(sine_aic_probs),
+                   'sine_min_bic_stat':np.min(sine_bic_probs),
                    'sine_bic_stat':np.sum(sine_bic_probs),
-                   'sine_aic_stat':np.sum(sine_aic_probs) }
+                   #'sine_aic_stat':np.sum(sine_aic_probs)
+                   }
 
     return output_dict
 
