@@ -28,6 +28,7 @@ from lmfit import minimize, Parameters
 from .dump import make_transit_mask, calc_mes, calc_var_stat
 from .utils import *
 from .fitfuncs import *
+from .ses import get_transit_signal, ocwt, calc_var_stat
 
 
 
@@ -143,12 +144,10 @@ class RecycleBin(object):
         self.refined_tces[tce_num,4] = out['tdur']
 
         if return_fit:
-            return tce_out
+            return out
 
         
-                
-
-    def _calc_mes(self, tce_num, mask_tce=False, calc_ses=False):
+    def _calc_mes(self, tce_num, mask_tce=False, calc_ses=False,):
 
         P,width,t0 = get_p_tdur_t0(self.tces[tce_num])        
         width_i = np.argmin(np.abs(width-self.dump.tdurs) )
@@ -166,7 +165,7 @@ class RecycleBin(object):
         
         foldtime = (self.dump.lc.time.copy() - t0 + P/4.)%P 
         
-        mestime, mes = calc_mes(foldtime[mask],num,den,P,texp=self.dump.lc.exptime,n_trans=1.)
+        mestime, mes = calc_mes(foldtime[mask],num,den,P,texp=self.dump.lc.exptime,n_trans=1., return_nans=True)
 
         return mestime-P/4., (mestime)/P , mes
 
@@ -200,6 +199,8 @@ class RecycleBin(object):
     def weak_secondary_test(self, tce_num):
 
         mestime, mesphase, mes = self._calc_mes(tce_num,calc_ses=True,mask_tce=True)
+
+        mes[mes==0] = np.nan
         
         max_secondary_mes = np.nanmax(mes)
         max_secondary_phase = mesphase[np.nanargmax(mes)]
@@ -251,7 +252,7 @@ class RecycleBin(object):
                                                           plot=showplot, nwidth=nwidth,
                                                           local_plots=False,global_fit=True)
 
-        output = {'global_transit_red_chi2':chit, 'global_cosine_red_chi2':chic, 'global_diff_red_chi2':chit-chic}
+        output = {'global_transit_red_chi2':chit, 'global_cosine_red_chi2':chic, 'global_diff_red_chi2':chit-chic, 'global_transit_chi2':chit*nf,  'global_cosine_chi2':chic*nf, 'global_diff_chi2':(chit-chic)*nf,}
         
         return output
 
@@ -263,7 +264,7 @@ class RecycleBin(object):
         P,width,t0 = get_p_tdur_t0(self.refined_tces[tce_num])
 
         try:
-            mestime, mesphase, mes = self._calc_mes(tce_num, use_mask)
+            mestime, mesphase, mes = self._calc_mes(tce_num, use_mask, calc_ses=True)
         except RuntimeError:
             self.dump.Calculate_SES()
             mestime, mesphase, mes = self._calc_mes(tce_num, use_mask)
@@ -271,8 +272,8 @@ class RecycleBin(object):
 
         phase = mestime/P - 0.5
 
-        max_mes = np.max(mes)
-        min_mes = np.min(mes) 
+        max_mes = np.nanmax(mes)
+        min_mes = np.nanmin(mes) 
         mad_mes = mad(mes)
         mes_over_mad = max_mes/mad_mes
 
@@ -349,20 +350,42 @@ class RecycleBin(object):
         return morph_test
 
 
+    def chi2_tests(self, tce_num, calc_ses=False):
+
+        P,width,t0 = get_p_tdur_t0(self.refined_tces[tce_num])
+
+        time = self.time
+        flux = self.flux
+        texp=self.exptime
+
+        if calc_ses:
+            self.dump.Calculate_SES_by_Segment(mask=None, tdurs=[width])
+
+        num = self.dump.num[0]
+        den = self.dump.den[0]
+                
+        channel_red_chi2, channel_chi2_stat = channel_chi2_statistic(time, flux, t0, P, width, cadence=texp,fill_mode='reflect')
+        temporal_red_chi2, temporal_chi2_stat = temporal_chi2_statistic(time, num, den, t0, P , cadence=texp)   
+        
+        return {'channel_red_chi2':channel_red_chi2, 'channel_chi2_stat':channel_chi2_stat,'temporal_red_chi2': temporal_red_chi2, 'temporal_chi2_stat':temporal_chi2_stat}
+
+
     def get_all_vetting_metrics(self, tce_num):
 
-        self._update_tce(tce_num)
+        bestfit = self._update_tce(tce_num, return_fit=True)
 
         depth = self.refined_tces[tce_num,2]
         P,width,t0 = get_p_tdur_t0(self.refined_tces[tce_num])
+        b = bestfit['b']
 
-        result_list =[{'P':P, 'depth_ppt':depth*1e3,'tdur':width,'t0':t0} ,
+        result_list =[{'P':P, 'depth_ppt':depth*1e3,'tdur':width,'t0':t0, 'b':b} ,
                      self._get_mes_metrics(tce_num),
-                      self.weak_secondary_test(tce_num),
+                     self.chi2_tests(tce_num),
+                     self.weak_secondary_test(tce_num),
                      #self.odd_even_mes_test(tce_num),
                      self.odd_even_depth_test(tce_num, True),
                      self.cosine_vs_transit_global(tce_num,depth=depth),
-                      self.local_morphology_test(tce_num)]
+                     self.local_morphology_test(tce_num)]
                      
         results = {k: v for d in result_list for k, v in d.items()}
 
@@ -407,15 +430,16 @@ def fit_transit(x,y,yerr,period,limb_darkening,exptime,p0,t0):
 
     def lc_func(t, *par):
         
-        rprs, width, t0 = par
+        rprs, width, t0, c = par
         params.per = np.pi*(width)/np.arcsin(1./50.)                      #orbital period
         params.rp = 10.**rprs   
         params.t0 = t0
-        return m.light_curve(params)-1.
+        return m.light_curve(params)-1.+c
     
 
+    p0 = np.append(p0,[0])
     result = curve_fit(lc_func, xdata=x, ydata=y, p0=p0, sigma=yerr, absolute_sigma=True, 
-                       bounds=[[-8, p0[1]/2., -p0[1]],[0., p0[1]*2., p0[1]]],
+                       bounds=[[-8, p0[1]/2., -p0[1],-1],[0., p0[1]*2., p0[1],1]],
                        check_finite=True, jac=None,)
     
     
@@ -756,14 +780,14 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
 
 
     jumpparams = Parameters()
-    jumpparams.add('a', value=depth, max=1e-2)
+    jumpparams.add('a', value=depth, max=1, min=-1.)
     jumpparams.add('t0', value=-0., vary=True, min=-2*tdur, max=2*tdur  )
     jumpparams.add('c0', value=np.median(f), vary=True)
 
 
 
     spsdparams = Parameters()
-    spsdparams.add('a', value=depth, max=0.5, min=0. )
+    spsdparams.add('a', value=depth*2., max=1., min=0. )
     spsdparams.add('d', value=2, min=1, max=100)
     spsdparams.add('t0', value=-tdur/4., vary=True, min=-tdur, max=tdur  )
     spsdparams.add('tdur', value=tdur, vary=True, min=0, max=2*tdur  )
@@ -773,7 +797,7 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
 
 
     sineparams = Parameters()
-    sineparams.add('a', value= depth, max=0.5, min=0. )
+    sineparams.add('a', value= depth*2., max=1., min=0. )
     sineparams.add('t0', value=0., vary=True, min=-tdur, max=tdur  )
     sineparams.add('tdur', value=tdur/4., vary=True, min=tdur/8., max=2*tdur  )
     sineparams.add('c0', value=np.median(f), vary=True)
@@ -974,12 +998,88 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
 
 
 
+def temporal_chi2_statistic(t, num, den, t0, P , cadence):    
+    
+    foldtime = (t-t0 + P/2.)%P - P/2.
+    t0_mask = np.abs(foldtime)<=cadence/2.
+    n_transits = np.sum(t0_mask)
+    
+    t0_num, t0_den = num[t0_mask], den[t0_mask]
+    
+    Z = np.sum(t0_num)/np.sqrt(np.sum(t0_den))
+    Zj = t0_num/np.sqrt(np.sum(t0_den))
+    Qj = t0_den/np.sum(t0_den)
 
-def weak_secondary_test(tce, f, ferr):
+    delta_Zj = (Zj - Qj*Z)**2.
+    
+    chi2 = np.sum( delta_Zj / Qj)
+    red_chi2 = chi2/(n_transits-1)
+    
+    chi2_stat = Z /np.sqrt(red_chi2)
+        
+    return red_chi2, chi2_stat
+    
 
+def channel_chi2_statistic(time, flux, t0, P, width, cadence, fill_mode='reflect'):
     
     
-    return 1.
+    pad_time, pad_flux, pad_boo = pad_time_series(time, flux,in_mode=fill_mode,
+                                                      pad_end=True,
+                                                      fill_gaps=True,
+                                                      cadence=cadence)
+    
+    template = get_transit_signal(width=width, depth=100., pad=len(pad_flux), b=0.25)
+    
+    flux_transform = ocwt(pad_flux - np.median(pad_flux))
+    template_transform = ocwt(template-1.)
+    
+    
+    window_size=8.*width
+    sig2 = [1./calc_var_stat(x, window_size*2**i, method='mad', exp_time=cadence) for i,x in enumerate(flux_transform)]
+    sig2 = np.array(sig2, )
+        
+    n_levels = flux_transform.shape[0]
+    levels = np.concatenate([np.arange(1,n_levels), [n_levels-1] ] )[:,np.newaxis]
+
+    N_i=[]
+    D_i=[]
+    
+    for i, l in enumerate(levels):
+        
+        N_channel = 2.** (-l) * convolve(flux_transform[i]*sig2[i], template_transform[i,::-1], mode='same')
+        D_channel = 2.** (-l) * convolve(sig2[i], template_transform[i,::-1]**2., mode='same')  
+        
+        N_i.append(N_channel)
+        D_i.append(D_channel)
+        
+    
+    N_i=np.array(N_i)[:,pad_boo]
+    D_i=np.array(D_i)[:,pad_boo]
+    
+    N = np.sum(N_i, axis=0)
+    D = np.sum(D_i, axis=0)
+
+
+    z = N/np.sqrt(D)
+    zi = N_i/np.sqrt(D)
+    qi = D_i/D
+        
+    delta_zi = (zi - qi*z)
+    chi2_n = np.sum(delta_zi**2./qi, axis=0)
+    
+    
+    foldtime = (time-t0 + P/2.)%P - P/2.
+    t0_mask = np.abs(foldtime)<cadence/2.
+    n_transits = np.sum(t0_mask)
+    
+    Z = np.sum(N[t0_mask])/np.sqrt(np.sum(D[t0_mask]) )
+        
+    chi2 = np.sum(chi2_n[t0_mask])
+    red_chi2 = chi2 / (n_transits*(n_levels-1))
+        
+    chi2_stat = Z / np.sqrt(red_chi2)
+        
+    return red_chi2, chi2_stat
 
 
 

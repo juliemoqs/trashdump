@@ -1,0 +1,35 @@
+
+'''
+Robotic Excision of Candidates Yearning to be Condoned as Lookalike Exoplanets
+'''
+
+
+import sys
+from os import path, getcwd
+
+import numpy as np
+from scipy.signal import fftconvolve, resample, medfilt, find_peaks, resample_poly, convolve
+from scipy.stats import trim_mean, sigmaclip
+import pandas as pd
+from astropy.io import fits
+import glob
+
+from statsmodels.tsa.ar_model import AutoReg
+from tqdm import tqdm
+
+import batman
+from wotan import flatten
+import pywt
+
+import warnings
+
+
+
+
+
+
+
+
+
+
+
