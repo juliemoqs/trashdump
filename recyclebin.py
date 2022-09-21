@@ -79,8 +79,11 @@ class RecycleBin(object):
 
         return m, params
 
-    def _get_lightcurve(self):
-        return self.batman_model.light_curve(self.batman_params)
+    def _get_lightcurve(self, params=None):
+        if params is None:
+            return self.batman_model.light_curve(self.batman_params)
+        else:
+            return self.batman_model.light_curve(params)
 
 
     def _transit_resids(self, par):
@@ -93,7 +96,8 @@ class RecycleBin(object):
         logdepth = vals['logdepth']
         
         a = 1./np.sin((np.pi*tdur)/per )
-        inc = np.arccos(b/a)*(180./np.pi)
+        
+        inc = np.rad2deg( np.arccos(b/a) )
     
         self.batman_params.t0 = t0                     
         self.batman_params.per = per
@@ -103,7 +107,12 @@ class RecycleBin(object):
 
         lc = self._get_lightcurve()
 
-        return (self.flux-lc) / self.flux_err**2.
+        resids = (self.flux-lc) / self.flux_err**2.
+        if any(np.isnan(resids)):
+            print(inc)
+            print('NaN in Transit Modelling')
+
+        return resids
 
         
     
@@ -122,9 +131,9 @@ class RecycleBin(object):
         params.add('t0', value=t0, vary=True, min=t0-width, max=t0+width)
         params.add('tdur', value=width, min=0.25 * width, max=4*width, vary=True)
         params.add('logdepth', value=-3, vary=True, max=0)
-        params.add('b', value=0.5, vary=True,max=1.2, min=0)
+        params.add('b', value=0.5, vary=True,max=1., min=0)
 
-        in_guess = minimize(self._transit_resids, params,method='LBFGS',nan_policy='omit')
+        in_guess = minimize(self._transit_resids, params,method='LBFGS', nan_policy='omit')
 
         if fit_method=='emcee':
             emcee_kws = dict(steps=2000, burn=500,
@@ -132,6 +141,7 @@ class RecycleBin(object):
             tce_out = minimize(self._transit_resids, in_guess.params, method=fit_method , **emcee_kws)
         else:
             tce_out = minimize(self._transit_resids, in_guess.params, method=fit_method)
+            
         out = tce_out.params.valuesdict()
 
         if P>max(self.time)-min(self.time):
@@ -273,15 +283,16 @@ class RecycleBin(object):
         phase = mestime/P - 0.5
 
         max_mes = np.nanmax(mes)
-        min_mes = np.nanmin(mes) 
+        #min_mes = np.nanmin(mes) 
         mad_mes = mad(mes)
         mes_over_mad = max_mes/mad_mes
 
-        mes_secondary = np.max(mes[~np.logical_and(mestime>P/4.-2*width,mestime>P/4.-2*width)])
+        mes_secondary = np.max(mes[~np.logical_and(mestime>P/4.-width,mestime>P/4.-width)])
         
         
-        out_dict = {'max_mes':max_mes, 'min_mes':min_mes, 'mad_mes':mad_mes,
-                    'mes_over_mad':mes_over_mad, 'max_secondary_mes':mes_secondary}
+        out_dict = {'max_mes':max_mes, #'min_mes':min_mes,
+                    'mad_mes':mad_mes,
+                    'mes_over_mad':mes_over_mad, }#'max_secondary_mes':mes_secondary}
         return out_dict
 
 
@@ -295,7 +306,8 @@ class RecycleBin(object):
                                                     initial_fit_method='LBFGS')
 
 
-        if even.errorbars and odd.errorbars:
+        if not(even.params['a'].stderr is None) and  not(odd.params['a'].stderr is None):
+        #if even.errorbars and odd.errorbars:
             stat = np.abs(odd.params['a']-even.params['a'])/np.sqrt(even.params['a'].stderr**2. + odd.params['a'].stderr**2.)
         else:
             print('Odd-Even Test Failed')
@@ -358,14 +370,12 @@ class RecycleBin(object):
         flux = self.flux
         texp=self.exptime
 
-        if calc_ses:
-            self.dump.Calculate_SES_by_Segment(mask=None, tdurs=[width])
 
-        num = self.dump.num[0]
-        den = self.dump.den[0]
                 
-        channel_red_chi2, channel_chi2_stat = channel_chi2_statistic(time, flux, t0, P, width, cadence=texp,fill_mode='reflect')
-        temporal_red_chi2, temporal_chi2_stat = temporal_chi2_statistic(time, num, den, t0, P , cadence=texp)   
+        channel_red_chi2, channel_chi2_stat = channel_chi2_statistic(time, flux, t0, P, width, cadence=texp,)
+
+        temporal_red_chi2, temporal_chi2_stat = temporal_chi2_statistic(time, flux, t0, P, width , cadence=texp,)    
+
         
         return {'channel_red_chi2':channel_red_chi2, 'channel_chi2_stat':channel_chi2_stat,'temporal_red_chi2': temporal_red_chi2, 'temporal_chi2_stat':temporal_chi2_stat}
 
@@ -377,8 +387,9 @@ class RecycleBin(object):
         depth = self.refined_tces[tce_num,2]
         P,width,t0 = get_p_tdur_t0(self.refined_tces[tce_num])
         b = bestfit['b']
-
-        result_list =[{'P':P, 'depth_ppt':depth*1e3,'tdur':width,'t0':t0, 'b':b} ,
+        tce_id= float(self.tces[tce_num,0] + (tce_num+1)*1e-2 )
+        
+        result_list =[{'tce_id':tce_id,'P':P, 'depth_ppt':depth*1e3,'tdur':width,'t0':t0, 'b':b} ,
                      self._get_mes_metrics(tce_num),
                      self.chi2_tests(tce_num),
                      self.weak_secondary_test(tce_num),
@@ -734,7 +745,7 @@ def odd_even_transit_depths(t,f,ferr,P,t0,width,initial_fit_method='LBFGS',
     bothparams = Parameters()
     bothparams.add('t0', value=0.25*P, vary=True,min=0.2*P,max=0.3*P)
     bothparams.add('a', value=1e-3, vary=True, min=1e-8, max=.99)
-    bothparams.add('b', value=1e3, vary=True, min=0, max=np.inf)
+    bothparams.add('b', value=1e3, vary=True, min=100, max=np.inf)
     bothparams.add('tdur', value=width, min=0.5 * width, max=2*width, vary=True)
     bothparams.add('c0', value=1., vary=True,)
     bothparams.add('c1', value=0., vary=False)
@@ -743,18 +754,18 @@ def odd_even_transit_depths(t,f,ferr,P,t0,width,initial_fit_method='LBFGS',
     
 
     initresult = minimize(trap_residual, bothparams,
-                          args=(phase%P, f, ferr), method=initial_fit_method)
+                          args=(phase%P, f, ferr), method=initial_fit_method, )
 
     bothresult =  minimize(trap_residual, initresult.params,
-                          args=(phase%P, f, ferr),method=fit_method)
+                           args=(phase%P, f, ferr),method=fit_method, reduce_fcn='neglogcauchy')
 
     bothresult.params['b'].vary=False
     
     evenresult = minimize(trap_residual, bothresult.params,
-                          args=(even_phase, even_flux, ferr[even]),method=fit_method)
+                          args=(even_phase, even_flux, ferr[even]),method=fit_method, reduce_fcn='neglogcauchy')
 
     oddresult = minimize(trap_residual, bothresult.params,
-                          args=(odd_phase, odd_flux, ferr[odd]),method=fit_method)
+                          args=(odd_phase, odd_flux, ferr[odd]),method=fit_method, reduce_fcn='neglogcauchy')
 
 
     return phase, bothresult, evenresult, oddresult
@@ -767,7 +778,7 @@ def odd_even_transit_depths(t,f,ferr,P,t0,width,initial_fit_method='LBFGS',
 
 
 def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
-                        ntdur=4,texp=0.0204,show_plot=False,min_frac=0.8,
+                        ntdur=3,texp=0.0204,show_plot=False,min_frac=0.8,
                         show_progress=True,mask_detrend=False):
 
     
@@ -779,10 +790,12 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
 
 
 
-    jumpparams = Parameters()
-    jumpparams.add('a', value=depth, max=1, min=-1.)
-    jumpparams.add('t0', value=-0., vary=True, min=-2*tdur, max=2*tdur  )
-    jumpparams.add('c0', value=np.median(f), vary=True)
+    rampparams = Parameters()
+    rampparams.add('a', value=depth*2., max=1., min=0. )
+    rampparams.add('d', value=2, min=1, max=100)
+    rampparams.add('t0', value=-tdur/4., vary=True, min=-tdur, max=tdur  )
+    rampparams.add('tdur', value=tdur, vary=True, min=0, max=4*tdur  )
+    rampparams.add('c0', value=np.median(f), vary=True)
 
 
 
@@ -815,8 +828,8 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
         spsdparams.add('c1', value=0, vary=False)
         spsdparams.add('c2', value=0, vary=False)
 
-        jumpparams.add('c1', value=0, vary=False)
-        jumpparams.add('c2', value=0, vary=False)
+        rampparams.add('c1', value=0, vary=False)
+        rampparams.add('c2', value=0, vary=False)
 
         boxparams.add('c1', value=0, vary=False)
         boxparams.add('c2', value=0, vary=False)
@@ -828,18 +841,16 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
         spsdparams.add('c1', value=0, vary=True)
         spsdparams.add('c2', value=0, vary=True)
 
-        jumpparams.add('c1', value=0, vary=True)
-        jumpparams.add('c2', value=0, vary=True)
+        rampparams.add('c1', value=0, vary=True)
+        rampparams.add('c2', value=0, vary=True)
 
         boxparams.add('c1', value=0, vary=True)
         boxparams.add('c2', value=0, vary=True)
         
 
 
-    jump_bic_probs = []
-
+    ramp_bic_probs = []
     spsd_bic_probs = []
-
     sine_bic_probs = []
 
     num_good_transits = 0
@@ -859,7 +870,7 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
         plot_times=[]
         spsd_fits = []
         box_fits = []
-        jump_fits = []
+        ramp_fits = []
         sine_fits = []
     
     while tn < max(t):
@@ -876,7 +887,7 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
         tn+=P
     
         if sum(tce_cut)<min_frac*(2*ntdur*tdur/texp):
-            frac_good_transit_points += sum(tce_cut)/(2*ntdur*tdur/texp)
+            #frac_good_transit_points += sum(tce_cut)/(2*ntdur*tdur/texp)
             continue
 
 
@@ -887,7 +898,7 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
 
         box_out = minimize(box_residual, boxparams, args=(tce_time, tce_flux, tce_err),
                            method=fit_method,)
-        jump_out = minimize(jump_residual, jumpparams, args=(tce_time, tce_flux, tce_err),
+        ramp_out = minimize(spsd_residual, rampparams, args=(-1*tce_time, tce_flux, tce_err),
                             method=fit_method,)
         spsd_out = minimize(spsd_residual, spsdparams, args=(tce_time, tce_flux, tce_err),
                             method=fit_method,)
@@ -896,7 +907,7 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
 
 
             
-        jump_bic_probs.append( (box_out.bic-jump_out.bic)/2.) 
+        ramp_bic_probs.append( (box_out.bic-ramp_out.bic)/2.) 
         #jump_aic_probs.append(  (box_out.aic-jump_out.aic)/2.) 
     
         spsd_bic_probs.append( (box_out.bic-spsd_out.bic)/2.) 
@@ -915,7 +926,7 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
 
             box_fits.append( box_residual(box_out.params, plot_time) )
             spsd_fits.append( spsd_residual(spsd_out.params, plot_time) )
-            jump_fits.append( jump_residual(jump_out.params, plot_time) )
+            ramp_fits.append( spsd_residual(ramp_out.params, -1*plot_time) )
             sine_fits.append( sine_residual(sine_out.params, plot_time) )
 
             transit_labels.append(n_transits)
@@ -947,8 +958,8 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
 
             l1, = ax.plot(plot_time, get_ppt(box_fits[i]), '-' , zorder=2,
                     label='box')
-            l2, = ax.plot(plot_time, get_ppt(jump_fits[i]), '-' , zorder=2,
-                    label='jump')
+            l2, = ax.plot(plot_time, get_ppt(ramp_fits[i]), '-' , zorder=2,
+                    label='ramp')
             l3, = ax.plot(plot_time, get_ppt(spsd_fits[i]), '-' , zorder=2,
                     label='spsd')
             l4, = ax.plot(plot_time, get_ppt(sine_fits[i]), '-' , zorder=2,
@@ -958,7 +969,7 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
             ax.text(0.15,0.1,'{}'.format(transit_labels[i]),ha='center',va='bottom',transform=ax.transAxes)
 
         ax = plt.subplot(snum,snum,i+2)
-        ax.legend([l1,l2,l3,l4], ['box','jump','spsd','sine'], ncol=1, loc='upper left')
+        ax.legend([l1,l2,l3,l4], ['box','ramp','spsd','sine'], ncol=1, loc='upper left')
         ax.axis('off')
     
             #plt.xlabel('$\mathregular{\Delta t_0}$')
@@ -971,12 +982,12 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
 
     output_dict = {'num_transits': n_transits,
                    'num_good_transits':num_good_transits,
-                   'frac_avg_points_in_transit': frac_good_transit_points/n_transits,
+                   'frac_avg_points_in_transit': frac_good_transit_points/num_good_transits,
                    #'jump_mean_bic_stat':np.mean(jump_bic_probs),
                    #'jump_mean_aic_stat':np.mean(jump_aic_probs),
-                   'jump_median_bic_stat':np.median(jump_bic_probs),
-                   'jump_min_bic_stat':np.min(jump_bic_probs),
-                   'jump_bic_stat':np.sum(jump_bic_probs),
+                   'ramp_median_bic_stat':np.median(ramp_bic_probs),
+                   'ramp_min_bic_stat':np.min(ramp_bic_probs),
+                   'ramp_bic_stat':np.sum(ramp_bic_probs),
                    #'jump_aic_stat':np.sum(jump_aic_probs),
                    #'spsd_mean_bic_stat':np.mean(spsd_bic_probs),
                    #'spsd_mean_aic_stat':np.mean(spsd_aic_probs),
@@ -998,44 +1009,32 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
 
 
 
-def temporal_chi2_statistic(t, num, den, t0, P , cadence):    
-    
-    foldtime = (t-t0 + P/2.)%P - P/2.
-    t0_mask = np.abs(foldtime)<=cadence/2.
-    n_transits = np.sum(t0_mask)
-    
-    t0_num, t0_den = num[t0_mask], den[t0_mask]
-    
-    Z = np.sum(t0_num)/np.sqrt(np.sum(t0_den))
-    Zj = t0_num/np.sqrt(np.sum(t0_den))
-    Qj = t0_den/np.sum(t0_den)
 
-    delta_Zj = (Zj - Qj*Z)**2.
-    
-    chi2 = np.sum( delta_Zj / Qj)
-    red_chi2 = chi2/(n_transits-1)
-    
-    chi2_stat = Z /np.sqrt(red_chi2)
+def tce_masked_num_den(time, flux, t0, P, width, cadence, fill_mode='reflect', nwindow=7):
+
+
         
-    return red_chi2, chi2_stat
-    
-
-def channel_chi2_statistic(time, flux, t0, P, width, cadence, fill_mode='reflect'):
-    
-    
     pad_time, pad_flux, pad_boo = pad_time_series(time, flux,in_mode=fill_mode,
                                                       pad_end=True,
                                                       fill_gaps=True,
                                                       cadence=cadence)
+
+
+
+    tce_mask = make_transit_mask(time, P, t0, width)
     
-    template = get_transit_signal(width=width, depth=100., pad=len(pad_flux), b=0.25)
+    pad_time_tce, pad_flux_tce, pad_boo_tce = pad_time_series(time[tce_mask], flux[tce_mask], in_mode=fill_mode,pad_end=True,fill_gaps=True,cadence=cadence)    
+    
+    template = get_transit_signal(width=width, depth=100., pad=len(pad_flux), b=0.2)
     
     flux_transform = ocwt(pad_flux - np.median(pad_flux))
+    tce_masked_flux_transform = ocwt(pad_flux_tce - np.median(pad_flux_tce))
+    
     template_transform = ocwt(template-1.)
     
     
-    window_size=8.*width
-    sig2 = [1./calc_var_stat(x, window_size*2**i, method='mad', exp_time=cadence) for i,x in enumerate(flux_transform)]
+    window_size=nwindow*width
+    sig2 = [1./calc_var_stat(x, window_size*2**i, method='mad', exp_time=cadence) for i,x in enumerate( tce_masked_flux_transform)]
     sig2 = np.array(sig2, )
         
     n_levels = flux_transform.shape[0]
@@ -1055,6 +1054,47 @@ def channel_chi2_statistic(time, flux, t0, P, width, cadence, fill_mode='reflect
     
     N_i=np.array(N_i)[:,pad_boo]
     D_i=np.array(D_i)[:,pad_boo]
+
+    return N_i, D_i
+
+
+
+
+def temporal_chi2_statistic(t, flux, t0, P, width , cadence, fill_mode='reflect', nwindow=7):    
+    
+    foldtime = (t-t0 + P/2.)%P - P/2.
+    t0_mask = np.abs(foldtime)<=cadence/2.
+    n_transits = np.sum(t0_mask)
+
+    N_i, D_i = tce_masked_num_den(t, flux, t0, P, width, cadence, fill_mode, nwindow)
+    
+    num = np.sum(N_i, axis=0)
+    den = np.sum(D_i, axis=0)
+    
+    t0_num, t0_den = num[t0_mask], den[t0_mask]
+    
+    Z = np.sum(t0_num)/np.sqrt(np.sum(t0_den))
+    Zj = t0_num/np.sqrt(np.sum(t0_den))
+    Qj = t0_den/np.sum(t0_den)
+
+    delta_Zj = (Zj - Qj*Z)**2.
+    
+    chi2 = np.sum( delta_Zj / Qj)
+    red_chi2 = chi2/(n_transits-1)
+    
+    chi2_stat = Z /np.sqrt(red_chi2)
+        
+    return red_chi2, chi2_stat
+
+    
+
+def channel_chi2_statistic(time, flux, t0, P, width, cadence, fill_mode='reflect', nwindow=7):
+
+
+    N_i, D_i = tce_masked_num_den(time, flux, t0, P, width, cadence, fill_mode, nwindow)
+
+    n_levels = N_i.shape[0]
+    
     
     N = np.sum(N_i, axis=0)
     D = np.sum(D_i, axis=0)
