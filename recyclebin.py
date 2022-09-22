@@ -136,8 +136,7 @@ class RecycleBin(object):
         in_guess = minimize(self._transit_resids, params,method='LBFGS', nan_policy='omit')
 
         if fit_method=='emcee':
-            emcee_kws = dict(steps=2000, burn=500,
-                             progress=True,nan_policy='omit')
+            emcee_kws = dict(steps=2000, burn=500,progress=True,nan_policy='omit')
             tce_out = minimize(self._transit_resids, in_guess.params, method=fit_method , **emcee_kws)
         else:
             tce_out = minimize(self._transit_resids, in_guess.params, method=fit_method)
@@ -165,7 +164,7 @@ class RecycleBin(object):
         mask = self.dump.lc.mask.copy()
 
         if mask_tce:
-            mask &= make_transit_mask(self.dump.lc.time, P, t0, width*1.5)
+            mask &= make_transit_mask(self.dump.lc.time, P, t0, width*2)
 
         if calc_ses:
             self.dump.Calculate_SES_by_Segment(mask=mask, tdurs=[width])
@@ -745,7 +744,7 @@ def odd_even_transit_depths(t,f,ferr,P,t0,width,initial_fit_method='LBFGS',
     bothparams = Parameters()
     bothparams.add('t0', value=0.25*P, vary=True,min=0.2*P,max=0.3*P)
     bothparams.add('a', value=1e-3, vary=True, min=1e-8, max=.99)
-    bothparams.add('b', value=1e3, vary=True, min=100, max=np.inf)
+    bothparams.add('b', value=1e3, vary=True, min=100, max=1e4)
     bothparams.add('tdur', value=width, min=0.5 * width, max=2*width, vary=True)
     bothparams.add('c0', value=1., vary=True,)
     bothparams.add('c1', value=0., vary=False)
@@ -1113,6 +1112,8 @@ def channel_chi2_statistic(time, flux, t0, P, width, cadence, fill_mode='reflect
     n_transits = np.sum(t0_mask)
     
     Z = np.sum(N[t0_mask])/np.sqrt(np.sum(D[t0_mask]) )
+
+    print(Z)
         
     chi2 = np.sum(chi2_n[t0_mask])
     red_chi2 = chi2 / (n_transits*(n_levels-1))
@@ -1122,5 +1123,42 @@ def channel_chi2_statistic(time, flux, t0, P, width, cadence, fill_mode='reflect
     return red_chi2, chi2_stat
 
 
+
+def remove_secondary_tces(tces, threshold=3.):
+    
+    if len(tces)<=1:
+        return tces
+    
+    tces_sorted = tces.sort_values('mes', ).iloc[::-1]
+
+    good_tces = [0]
+    
+    for i in range(len(tces_sorted.iloc[1:]) ):
+        
+        tce=tces_sorted.iloc[i+1]
+                
+        P_A = tces_sorted.iloc[good_tces].period.to_numpy()
+        P_B = float(tce.period)
+        
+        delta_P = np.min([(P_A-P_B)/P_A,(P_B-P_A)/P_B], axis=0)
+                
+        delta_P_int = np.abs(delta_P - np.round(delta_P,0))
+        
+        sigma_P = np.sqrt(2.) * erfcinv(delta_P_int)        
+        
+        if np.max(sigma_P)<threshold:
+            good_tces.append(i+1)
+            
+    return tces_sorted.iloc[good_tces]
+
+    
+
+
+    
+    
+
+    
+
+    
 
 
