@@ -156,14 +156,17 @@ def calc_mes(fold_time, num, den, P, n_trans=2, texp=0.0204, norm=False,return_n
     n_transits = histogram1d(fold_time, bins=nbins, range=bin_range)
     
     transit_cut = n_transits<n_trans
+
+    den_binned[transit_cut]=1.
+    num_binned[transit_cut]=0.
     
     mes = num_binned / np.sqrt(den_binned)
 
     if norm:
-        mes -= np.nanmedian(mes)
-        mes/=mad(mes[~np.isnan(mes)])
+        mes -= np.nanmedian(mes[transit_cut])
+        mes/=mad(mes[transit_cut])
 
-    mes[transit_cut] = 0.
+    #mes[transit_cut] = 0.
 
     if return_nans:
         mes[n_transits==0]=np.nan    

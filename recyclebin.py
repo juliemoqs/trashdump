@@ -21,7 +21,7 @@ from tqdm import tqdm
 import batman
 import wotan
 
-
+from scipy.special import  erfcinv
 from scipy.optimize import curve_fit
 from lmfit import minimize, Parameters
 
@@ -29,7 +29,6 @@ from .dump import make_transit_mask, calc_mes, calc_var_stat
 from .utils import *
 from .fitfuncs import *
 from .ses import get_transit_signal, ocwt, calc_var_stat
-
 
 
 class RecycleBin(object):
@@ -54,11 +53,20 @@ class RecycleBin(object):
         self.batman_model, self.batman_params = self._get_batman()
 
 
-    def _get_tce_mask(self, tce_num):
+    def _get_tce_mask(self, tce_num, time=None):
 
         P,width,t0 = get_p_tdur_t0(self.tces[tce_num])
-
         return make_transit_mask(self.time, P, t0, width)
+
+    def _get_previous_tce_masks(self, tce_num):
+
+        i=0
+        previous_tce_mask = np.ones_like(self.dump.lc.time, dtype=bool)
+        while i<tce_num:
+            P,width,t0 = get_p_tdur_t0(self.tces[i])
+            previous_tce_mask &= make_transit_mask(self.dump.lc.time, P, t0, width)
+            i+=1
+        return previous_tce_mask
 
 
 
@@ -156,15 +164,18 @@ class RecycleBin(object):
             return out
 
         
-    def _calc_mes(self, tce_num, mask_tce=False, calc_ses=False,):
+    def _calc_mes(self, tce_num, mask_tce=False, calc_ses=False, use_mask=None):
 
         P,width,t0 = get_p_tdur_t0(self.tces[tce_num])        
-        width_i = np.argmin(np.abs(width-self.dump.tdurs) )
+        #width_i = np.argmin(np.abs(width-self.dump.tdurs) )
 
+       
         mask = self.dump.lc.mask.copy()
+        if not(use_mask is None):
+            mask&=use_mask
 
         if mask_tce:
-            mask &= make_transit_mask(self.dump.lc.time, P, t0, width*2)
+            mask &= make_transit_mask(self.dump.lc.time, P, t0, width)
 
         if calc_ses:
             self.dump.Calculate_SES_by_Segment(mask=mask, tdurs=[width])
@@ -226,6 +237,15 @@ class RecycleBin(object):
                   }
         
         return output
+
+    def same_period_test(self, tce_num):
+        
+        same_period_stats = same_period_test(self.tces)
+
+        return same_period_stats[tce_num]
+        
+        
+        
     
     def cosine_vs_transit_local(self, tce_num, showplot=False, nwidth=4,local_plots=False):
 
@@ -268,15 +288,15 @@ class RecycleBin(object):
 
 
 
-    def _get_mes_metrics(self, tce_num , use_mask=False):
+    def _get_mes_metrics(self, tce_num , use_mask=None):
 
         P,width,t0 = get_p_tdur_t0(self.refined_tces[tce_num])
 
         try:
-            mestime, mesphase, mes = self._calc_mes(tce_num, use_mask, calc_ses=True)
+            mestime, mesphase, mes = self._calc_mes(tce_num, use_mask=use_mask, calc_ses=True)
         except RuntimeError:
             self.dump.Calculate_SES()
-            mestime, mesphase, mes = self._calc_mes(tce_num, use_mask)
+            mestime, mesphase, mes = self._calc_mes(tce_num, use_mask=use_mask)
             
 
         phase = mestime/P - 0.5
@@ -361,13 +381,19 @@ class RecycleBin(object):
         return morph_test
 
 
-    def chi2_tests(self, tce_num, calc_ses=False):
+    def chi2_tests(self, tce_num, calc_ses=False, use_mask=None):
 
         P,width,t0 = get_p_tdur_t0(self.refined_tces[tce_num])
 
-        time = self.time
-        flux = self.flux
         texp=self.exptime
+
+        if not(use_mask is None):
+            time = self.time[use_mask]
+            flux = self.time[use_mask]
+        else:
+            time = self.time
+            flux = self.flux
+            
 
 
                 
@@ -386,10 +412,14 @@ class RecycleBin(object):
         depth = self.refined_tces[tce_num,2]
         P,width,t0 = get_p_tdur_t0(self.refined_tces[tce_num])
         b = bestfit['b']
-        tce_id= float(self.tces[tce_num,0] + (tce_num+1)*1e-2 )
         
-        result_list =[{'tce_id':tce_id,'P':P, 'depth_ppt':depth*1e3,'tdur':width,'t0':t0, 'b':b} ,
-                     self._get_mes_metrics(tce_num),
+        tce_id= float(self.tces[tce_num,0] + (tce_num+1)*1e-2 )
+
+            
+        previous_tce_mask = self._get_previous_tce_masks(tce_num)
+        
+        result_list =[{'tce_id':tce_id,'period':P, 'depth_ppt':depth*1e3,'tdur':width,'t0':t0, 'b':b} ,
+                     self._get_mes_metrics(tce_num, use_mask=previous_tce_mask),
                      self.chi2_tests(tce_num),
                      self.weak_secondary_test(tce_num),
                      #self.odd_even_mes_test(tce_num),
@@ -888,11 +918,10 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
         if sum(tce_cut)<min_frac*(2*ntdur*tdur/texp):
             #frac_good_transit_points += sum(tce_cut)/(2*ntdur*tdur/texp)
             continue
-
-
         
         num_good_transits+=1
-        frac_good_transit_points += sum(tce_cut)/(2*ntdur*tdur/texp)
+        
+        frac_good_transit_points += sum(np.abs(tce_time)<tdur)/(2*tdur/texp)
     
 
         box_out = minimize(box_residual, boxparams, args=(tce_time, tce_flux, tce_err),
@@ -979,7 +1008,9 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
 
             
 
-    output_dict = {'num_transits': n_transits,
+    if num_good_transits!=0:
+        
+        output_dict = {'num_transits': n_transits,
                    'num_good_transits':num_good_transits,
                    'frac_avg_points_in_transit': frac_good_transit_points/num_good_transits,
                    #'jump_mean_bic_stat':np.mean(jump_bic_probs),
@@ -1002,7 +1033,33 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
                    #'sine_aic_stat':np.sum(sine_aic_probs)
                    }
 
-    return output_dict
+        return output_dict
+
+    else:
+        output_dict = {'num_transits': n_transits,
+                   'num_good_transits':num_good_transits,
+                   'frac_avg_points_in_transit': 0.,
+                   #'jump_mean_bic_stat':np.mean(jump_bic_probs),
+                   #'jump_mean_aic_stat':np.mean(jump_aic_probs),
+                   'ramp_median_bic_stat':np.nan,
+                   'ramp_min_bic_stat':np.nan,
+                   'ramp_bic_stat':np.nan,
+                   #'jump_aic_stat':np.sum(jump_aic_probs),
+                   #'spsd_mean_bic_stat':np.mean(spsd_bic_probs),
+                   #'spsd_mean_aic_stat':np.mean(spsd_aic_probs),
+                   'spsd_median_bic_stat':np.nan,
+                   'spsd_min_bic_stat':np.nan,
+                   'spsd_bic_stat':np.nan,
+                   #'spsd_aic_stat':np.sum(spsd_aic_probs),
+                   #'sine_mean_bic_stat':np.mean(sine_bic_probs),
+                   #'sine_mean_aic_stat':np.mean(sine_aic_probs),
+                   'sine_median_bic_stat':np.nan,
+                   'sine_min_bic_stat':np.nan,
+                   'sine_bic_stat':np.nan,
+                   #'sine_aic_stat':np.sum(sine_aic_probs)
+                   }
+        return output_dict
+        
 
 
 
@@ -1112,8 +1169,6 @@ def channel_chi2_statistic(time, flux, t0, P, width, cadence, fill_mode='reflect
     n_transits = np.sum(t0_mask)
     
     Z = np.sum(N[t0_mask])/np.sqrt(np.sum(D[t0_mask]) )
-
-    print(Z)
         
     chi2 = np.sum(chi2_n[t0_mask])
     red_chi2 = chi2 / (n_transits*(n_levels-1))
@@ -1124,35 +1179,43 @@ def channel_chi2_statistic(time, flux, t0, P, width, cadence, fill_mode='reflect
 
 
 
-def remove_secondary_tces(tces, threshold=3.):
+def same_period_test(tces,):
     
-    if len(tces)<=1:
-        return tces
-    
-    tces_sorted = tces.sort_values('mes', ).iloc[::-1]
 
-    good_tces = [0]
-    
-    for i in range(len(tces_sorted.iloc[1:]) ):
-        
-        tce=tces_sorted.iloc[i+1]
-                
-        P_A = tces_sorted.iloc[good_tces].period.to_numpy()
-        P_B = float(tce.period)
+    if isinstance(tces, np.ndarray):
+        tces = pd.DataFrame(tces, columns=['star_id','period','mes','t0','tdur'])
+    if len(tces)<=1:
+        return np.array([0])
+
+    mes_sort_order = np.argsort(-1*tces['mes'].to_numpy())
+    periods_sorted = tces.period.to_numpy()[mes_sort_order]
+    same_period_stats = np.zeros_like(mes_sort_order,dtype=float)
+
+    for i,P in enumerate(periods_sorted[1:]):
+                        
+        P_A = periods_sorted[:i+1]
+        P_B = periods_sorted[i+1]
+
         
         delta_P = np.min([(P_A-P_B)/P_A,(P_B-P_A)/P_B], axis=0)
                 
         delta_P_int = np.abs(delta_P - np.round(delta_P,0))
-        
         sigma_P = np.sqrt(2.) * erfcinv(delta_P_int)        
-        
-        if np.max(sigma_P)<threshold:
-            good_tces.append(i+1)
+        same_period_stats[i+1] = np.max(sigma_P)
+
             
-    return tces_sorted.iloc[good_tces]
+    return same_period_stats[np.argsort(mes_sort_order)]
 
     
 
+
+    
+
+def remove_secondary_tces(tces, threshold=3.):
+
+    results = same_period_test(tces)
+    
+    return tces[results<threshold]
 
     
     
