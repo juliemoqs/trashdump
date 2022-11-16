@@ -15,7 +15,7 @@ def ocwt(x, max_level=14):
 
     
 
-def get_transit_signal(width, depth=100., limb_dark=[0.4012, 0.5318, -0.2411,0.0194], exp_time=0.020417, pad=65536, b=0., n_width=3.):
+def get_transit_signal(width, depth=100., limb_dark=[0.4012, 0.5318, -0.2411,0.0194], exp_time=0.020417, pad=65536, b=0., n_width=1.):
 
     if len(limb_dark) != 4:
         limb_dark = [0.4012, 0.5318, -0.2411, 0.0194]
@@ -42,8 +42,9 @@ def get_transit_signal(width, depth=100., limb_dark=[0.4012, 0.5318, -0.2411,0.0
     lc = m.light_curve(params, )
 
     if len(lc)>pad:
-        print(pad, len(lc) )
+        print(pad, len(lc), width )
         print('What the hell? Light curve is longer than padded light curve')
+
 
     ends = np.array_split(np.ones( pad - len(lc) ), 2)
     
@@ -53,7 +54,7 @@ def get_transit_signal(width, depth=100., limb_dark=[0.4012, 0.5318, -0.2411,0.0
 
 
 def calc_var_stat(x, window_size, exp_time, method='mad',
-                  slat_frac=0.2, n_mad_window=99_001):
+                  slat_frac=0.2, n_mad_window=15_001):
 
     if method=='mean':
         window_points = 2*int(window_size/exp_time)
@@ -68,10 +69,17 @@ def calc_var_stat(x, window_size, exp_time, method='mad',
         if window_points<n_mad_window:
             sig = 1.4826 * running_median_insort(np.abs(x), window_points)
         else:
-            nskip = int(np.floor(window_points/n_mad_window))
-            x_skipped = x[0::nskip] 
+            dx  = window_points/n_mad_window
+            indices = np.arange(len(x) )
+            skip_indices = np.linspace(0,len(x), int(len(x)/dx) )
+
+            x_skipped = np.interp(skip_indices, indices, x )
+            
+            #x_skipped = x[0::nskip] 
             sig_decimated = 1.4826*running_median_insort(np.abs(x_skipped), n_mad_window)
-            sig = np.repeat(sig_decimated, nskip)[:len(x)]
+            
+            #sig = np.repeat(sig_decimated, nskip)[:len(x)]
+            sig =  np.interp(indices, skip_indices, sig_decimated )
 
         if (sig==0).any():
             nbad = np.sum(sig==0)

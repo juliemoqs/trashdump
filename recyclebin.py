@@ -83,7 +83,7 @@ class RecycleBin(object):
         params.limb_dark = limb_law           #limb darkening model
         params.u = self.limb_coeff
 
-        m = batman.TransitModel(params, self.time, supersample_factor=3, exp_time=self.exptime)
+        m = batman.TransitModel(params, self.time, supersample_factor=3, exp_time=self.exptime, max_err=0.1)
 
         return m, params
 
@@ -135,10 +135,10 @@ class RecycleBin(object):
         if P>max(self.time)-min(self.time):
             params.add('per', value=max(self.time)-min(self.time), vary=False, min=.99*P, max=1.01*P)
         else:
-            params.add('per', value=P, vary=True, min=.99*P, max=1.01*P)
+            params.add('per', value=P, vary=True, min=.999*P, max=1.001*P)
         params.add('t0', value=t0, vary=True, min=t0-width, max=t0+width)
         params.add('tdur', value=width, min=0.25 * width, max=4*width, vary=True)
-        params.add('logdepth', value=-3, vary=True, max=0)
+        params.add('logdepth', value=-3, vary=True, max=0, min=-6)
         params.add('b', value=0.5, vary=True,max=1., min=0)
 
         in_guess = minimize(self._transit_resids, params,method='LBFGS', nan_policy='omit')
@@ -164,9 +164,16 @@ class RecycleBin(object):
             return out
 
         
-    def _calc_mes(self, tce_num, mask_tce=False, calc_ses=False, use_mask=None):
+    def _calc_mes(self, tce_num, mask_tce=False, calc_ses=False, use_mask=None,
+                  width=None):
 
-        P,width,t0 = get_p_tdur_t0(self.tces[tce_num])        
+        if width is None:
+            P,width,t0 = get_p_tdur_t0(self.tces[tce_num])
+        else:
+            P,_,t0 = get_p_tdur_t0(self.tces[tce_num])
+
+        
+        
         #width_i = np.argmin(np.abs(width-self.dump.tdurs) )
 
        
@@ -229,11 +236,11 @@ class RecycleBin(object):
         mad_secondary_mes = mad(mes)
         
 
-        output = {'max_secondary_mes': max_secondary_mes,
-                  'max_secondary_mes_phase': max_secondary_phase,
-                  'min_secondary_mes': min_secondary_mes,
-                  'min_secondary_mes_phase':min_secondary_phase,
-                  'mad_secondary_mes':mad_secondary_mes
+        output = {'max_sec_mes': max_secondary_mes,
+                  'max_sec_mes_phase': max_secondary_phase,
+                  'min_sec_mes': min_secondary_mes,
+                  'min_sec_mes_phase':min_secondary_phase,
+                  'mad_sec_mes':mad_secondary_mes
                   }
         
         return output
@@ -266,12 +273,13 @@ class RecycleBin(object):
 
         return chit, chic, nf
 
-    def cosine_vs_transit_global(self, tce_num, showplot=False, nwidth=4, depth=None):
+    def cosine_vs_transit_global(self, tce_num, showplot=False, nwidth=4, depth=None, return_plot_values=False):
 
         P,width,t0 = get_p_tdur_t0(self.refined_tces[tce_num])
         depth = self.refined_tces[tce_num,2]
 
-        chic, chit, nf = compare_cosine_and_transit_model(time=self.time,
+        if not(return_plot_values):
+            chic, chit, nf = compare_cosine_and_transit_model(time=self.time,
                                                           flux=self.flux,
                                                           t0=t0, width=width, P=P,
                                                           depth=depth**0.5,
@@ -281,9 +289,29 @@ class RecycleBin(object):
                                                           plot=showplot, nwidth=nwidth,
                                                           local_plots=False,global_fit=True)
 
-        output = {'global_transit_red_chi2':chit, 'global_cosine_red_chi2':chic, 'global_diff_red_chi2':chit-chic, 'global_transit_chi2':chit*nf,  'global_cosine_chi2':chic*nf, 'global_diff_chi2':(chit-chic)*nf,}
+            output = {'global_tran_red_chi2':chit, 'global_sin_red_chi2':chic, 'global_tran_chi2':chit*nf,  'global_sin_chi2':chic*nf, 'global_diff_red_chi2':chit-chic, 'global_diff_chi2':(chit-chic)*nf,}
+
+            
         
-        return output
+            return output
+
+        else:
+
+            chic, chit, nf, plot_vals = compare_cosine_and_transit_model(time=self.time,
+                                                          flux=self.flux,
+                                                          t0=t0, width=width, P=P,
+                                                          depth=depth**0.5,
+                                                          exptime=self.exptime,
+                                                          limb_dark_coeffs=self.limb_coeff,
+                                                          flux_err=self.flux_err,
+                                                          plot=showplot, nwidth=nwidth,
+                                                          local_plots=False,
+                                                             global_fit=True,
+                                                              return_plot=True)
+
+            output = {'global_tran_red_chi2':chit, 'global_sin_red_chi2':chic, 'global_diff_red_chi2':chit-chic, 'global_tran_chi2':chit*nf,  'global_sin_chi2':chic*nf, 'global_diff_chi2':(chit-chic)*nf,}
+
+            return output, plot_vals
 
 
 
@@ -336,8 +364,8 @@ class RecycleBin(object):
             return {'odd_even_depth_stat':stat,
                     'odd_depth':odd.params['a'].value,
                     'even_depth':even.params['a'].value,
-                    'odd_depth_stderr':odd.params['a'].stderr,
-                    'even_depth_stderr':even.params['a'].stderr,
+                    'odd_depth_err':odd.params['a'].stderr,
+                    'even_depth_err':even.params['a'].stderr,
                     }
         else:
             return both, even, odd, stat
@@ -374,6 +402,8 @@ class RecycleBin(object):
         ferr = self.flux_err
         texp=self.exptime
 
+        if len(self.time) * texp / P > 30:
+            return {}
 
         morph_test = bic_morphology_test(t,f,ferr,P,t0,width,depth,texp=texp,**test_kw)
 
@@ -394,13 +424,9 @@ class RecycleBin(object):
             time = self.time
             flux = self.flux
             
-
-
                 
         channel_red_chi2, channel_chi2_stat = channel_chi2_statistic(time, flux, t0, P, width, cadence=texp,)
-
         temporal_red_chi2, temporal_chi2_stat = temporal_chi2_statistic(time, flux, t0, P, width , cadence=texp,)    
-
         
         return {'channel_red_chi2':channel_red_chi2, 'channel_chi2_stat':channel_chi2_stat,'temporal_red_chi2': temporal_red_chi2, 'temporal_chi2_stat':temporal_chi2_stat}
 
@@ -491,7 +517,7 @@ def fit_transit(x,y,yerr,period,limb_darkening,exptime,p0,t0):
     plot_x = np.linspace(min(x_fold), max(x_fold), 100)
 
     
-    m = batman.TransitModel(params, plot_x, exp_time=exptime, fac=0.001, supersample_factor=5)
+    m = batman.TransitModel(params, plot_x, exp_time=exptime, fac=0.001, supersample_factor=5, max_err=0.1)
     
     return chi2, resids, plot_x, lc_func(plot_x,  *result[0] )
     
@@ -501,7 +527,7 @@ def fit_transit(x,y,yerr,period,limb_darkening,exptime,p0,t0):
 
 def compare_cosine_and_transit_model(time,flux,t0,width,P,limb_dark_coeffs,exptime,
                                      flux_err=None,nwidth=4,plot=True,local_plots=False,
-                                     global_fit=False, depth=None):
+                                     global_fit=False, depth=None, return_plot=False):
 
     if depth is None:
         depth=1e-3
@@ -618,7 +644,11 @@ def compare_cosine_and_transit_model(time,flux,t0,width,P,limb_dark_coeffs,expti
         plt.tight_layout()
 #        plt.show()
         
+        
     nfreedom = len(transit_time) - 3.
+
+    if return_plot:
+        return sine_chi2, tran_chi2, nfreedom, ((cosine_time, cosine_flux, sine_resids), (sine_x, sine_y), (transit_time, transit_flux, tran_resids), (tran_x, tran_y) )
         
     return sine_chi2, tran_chi2, nfreedom
 
@@ -732,7 +762,7 @@ def fit_transit_local_poly(x,y,yerr,p0,t0,width,limb_darkening,exptime=0.0204):
     params.u = limb_darkening            #limb darkening coefficients [u1, u2]
     params.limb_dark = "nonlinear"       #limb darkening model
          
-    m = batman.TransitModel(params, x, exp_time=exptime,)
+    m = batman.TransitModel(params, x, exp_time=exptime, max_err=0.1)
 
     def lc_func(t, *par):
         a0,a1,a2,rprs,t_0 = par
@@ -1012,7 +1042,7 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
         
         output_dict = {'num_transits': n_transits,
                    'num_good_transits':num_good_transits,
-                   'frac_avg_points_in_transit': frac_good_transit_points/num_good_transits,
+                   'frac_points_in_tran': frac_good_transit_points/num_good_transits,
                    #'jump_mean_bic_stat':np.mean(jump_bic_probs),
                    #'jump_mean_aic_stat':np.mean(jump_aic_probs),
                    'ramp_median_bic_stat':np.median(ramp_bic_probs),
@@ -1038,7 +1068,7 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
     else:
         output_dict = {'num_transits': n_transits,
                    'num_good_transits':num_good_transits,
-                   'frac_avg_points_in_transit': 0.,
+                   'frac_points_in_tran': 0.,
                    #'jump_mean_bic_stat':np.mean(jump_bic_probs),
                    #'jump_mean_aic_stat':np.mean(jump_aic_probs),
                    'ramp_median_bic_stat':np.nan,
@@ -1195,7 +1225,6 @@ def same_period_test(tces,):
                         
         P_A = periods_sorted[:i+1]
         P_B = periods_sorted[i+1]
-
         
         delta_P = np.min([(P_A-P_B)/P_A,(P_B-P_A)/P_B], axis=0)
                 
@@ -1220,7 +1249,353 @@ def remove_secondary_tces(tces, threshold=3.):
     
     
 
+
+
+def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savefig=True, save_directory='.', zoom_on_binned=True):
     
+    def bin_flux(t, f, dt):
+        t_bin_edges = np.arange(min(t), max(t), dt)    
+        binned_f = np.histogram(t, t_bin_edges, weights=f)[0] / np.histogram(t, t_bin_edges)[0]
+        return t_bin_edges[:-1]+dt/2., binned_f
+
+
+    # Calculate Things here
+    P,width,t0 = get_p_tdur_t0(recbin.tces[tce_num])
+
+    fit = recbin._update_tce(tce_num, fit_method='LBFGS', return_fit=True)
+
+    vet_stats = recbin.get_all_vetting_metrics(tce_num)
+
+    P_best, width_best, t0_best = vet_stats['period'], vet_stats['tdur'], vet_stats['t0']
+
+
+
+    mestime, mesphase, mes = recbin._calc_mes(tce_num, calc_ses=True, mask_tce=False)
+    mestime_sec, mesphase_sec, mes_sec = recbin._calc_mes(tce_num, calc_ses=True, mask_tce=True)
+
+    min_width_searched = min(recbin.dump.tdurs)
+    max_width_searched = max(recbin.dump.tdurs)
+
+    _, _, mes_min_width = recbin._calc_mes(tce_num, calc_ses=True, mask_tce=False, width=min_width_searched)
+    _, _, mes_max_width = recbin._calc_mes(tce_num, calc_ses=True, mask_tce=False,width=max_width_searched)
+
+
+
+    folded_time = (recbin.dump.lc.time[recbin.dump.lc.mask]-t0_best + P_best/4.)%P_best - P_best/4.
+    folded_flux = recbin.dump.lc.flux[recbin.dump.lc.mask]
+
+    folded_time_zoom = (recbin.dump.lc.time[recbin.dump.lc.mask]-t0_best + P_best/2.)%P_best - P_best/2.
+
+    t_bin, f_bin = bin_flux(t=folded_time, f=folded_flux-np.median(folded_flux), dt=width_best/4.)
+    t_bin_zoom, f_bin_zoom = bin_flux(t=folded_time_zoom, f=folded_flux-np.median(folded_flux), dt=width_best/4.)
+
+
+
+    transit_model = recbin._get_lightcurve() - 1.
+
+
+
+    # Set up the plots
+    fig = plt.figure(constrained_layout=True, figsize=(12,10))
+    gs = fig.add_gridspec(5, 4)
+
+    #folded plot
+    folded_plot_ax = fig.add_subplot(gs[0,:-1])
+    folded_plot_ax.plot( folded_time, folded_flux - np.median(folded_flux), '.' , color='0.7', markersize=3)
+    folded_plot_ax.plot(t_bin, f_bin, 'o', markerfacecolor=color1, markeredgewidth=1, c='k')
+
+    folded_plot_ax.plot(np.sort(folded_time), transit_model[np.argsort(folded_time)], c=color2, lw=2)
+
+
+    # Folded plot Zoomed
+    folded_plot_ax_zoom = fig.add_subplot(gs[0,-1], sharey=folded_plot_ax)
+
+    folded_plot_ax_zoom.plot( folded_time_zoom, folded_flux - np.median(folded_flux), '.' , color='0.7', markersize=3)
+    folded_plot_ax_zoom.plot(t_bin_zoom, f_bin_zoom, 'o', markerfacecolor=color1, markeredgewidth=1, c='k')
+    folded_plot_ax_zoom.plot(np.sort(folded_time_zoom), transit_model[np.argsort(folded_time_zoom)], c=color2, lw=2)
+
+    folded_plot_ax_zoom.set_xlim(-width*2, width*2)
+
+
+    folded_plot_ax.set_ylabel('$\mathregular{\delta F / F}$')
+    #folded_plot_ax.set_xlabel('$\mathregular{\Delta t_0}$')
+    #folded_plot_ax_zoom.set_xlabel('$\mathregular{\Delta t_0}$')
+
+    if zoom_on_binned:
+        folded_plot_ax.set_ylim(np.nanmin(f_bin)-np.nanstd(f_bin), np.nanmax(f_bin)+np.nanstd(f_bin))
+
+
+
+
+
+    # Mes plot
+    mes_plot_ax = fig.add_subplot(gs[1,:-1], )
+
+    mes_plot_ax.plot(mestime, mes, lw=2, color='k', label='tdur={:.2f}'.format(width), zorder=99)
+    mes_plot_ax.plot(mestime, mes_min_width, lw=1, color=color1, label='tdur={:.2f}'.format(min_width_searched))
+    mes_plot_ax.plot(mestime, mes_max_width, lw=1, color=color2, label='tdur={:.2f}'.format(max_width_searched))
+
+
+
+    mes_plot_ax.axhline(0, color='0.7', zorder=-99, )
+    mes_plot_ax.axhline(7., color='0.7', ls='--',)
+    mes_plot_ax.legend(ncol=3)
+
+
+
+
+    # Zoomed MES plot
+    mes_plot_ax_zoom = fig.add_subplot(gs[1,-1], sharey=mes_plot_ax, sharex=folded_plot_ax_zoom)
+
+
+    mes_plot_ax_zoom.plot(mestime, mes, lw=2, color='k', zorder=99)
+
+    mes_plot_ax_zoom.plot(mestime, mes_min_width, lw=0.5, color=color1)
+    mes_plot_ax_zoom.plot(mestime, mes_max_width, lw=0.5, color=color2)
+
+
+    mes_plot_ax_zoom.axhline(0, color='0.7', zorder=-99)
+    mes_plot_ax_zoom.axhline(7., color='0.7', ls='--', zorder=-99)
+
+    mes_plot_ax_zoom.set_xlabel('$\mathregular{\Delta t_0}$')
+    mes_plot_ax.set_xlabel('$\mathregular{\Delta t_0}$')
+    mes_plot_ax.set_ylabel('MES [$\mathregular{\sigma}$]')
+
+
+
+
+    # Odd-Even Plots
+
+    both, even, odd, stat = recbin.odd_even_depth_test(tce_num)
+
+
+    both_plot_ax = fig.add_subplot(gs[2,2], )
+    odd_plot_ax = fig.add_subplot(gs[3,2], sharey=both_plot_ax, sharex=both_plot_ax)
+    even_plot_ax = fig.add_subplot(gs[3,3], sharey=both_plot_ax, sharex=both_plot_ax)
+
+    both_plot_ax.set_xlim(-width_best*2, width_best*2)
+
+    both_plot_ax.set_title('Odd+Even')
+    odd_plot_ax.set_title('Odd Only')
+    even_plot_ax.set_title('Even Only')
+
+    #both_plot_ax.set_ylabel('$\mathregular{\delta F / F}$')
+
+    folded_time_oddeven_cuts = (recbin.dump.lc.time[recbin.dump.lc.mask]-t0_best + P_best/2.)%(2*P_best) 
+
+    odd_cut = folded_time_oddeven_cuts<=P_best
+    even_cut = folded_time_oddeven_cuts>P_best
+
+
+    folded_time_half_phase = (recbin.dump.lc.time[recbin.dump.lc.mask]-t0_best + P_best/2.)%P_best - P_best/2.
+
+    both_phase = np.sort(folded_time_half_phase)
+    odd_phase = both_phase[odd_cut]
+    even_phase = both_phase[even_cut]
+
+    both_offset = both.params['c0']
+    even_offset = even.params['c0']
+    odd_offset  = odd.params['c0']
+
+
+    both_plot_ax.plot(folded_time_half_phase,  folded_flux-both_offset,'.', color='0.7', markersize=3)
+    odd_plot_ax.plot(folded_time_half_phase[odd_cut], folded_flux[odd_cut]-odd_offset, '.',color='0.7',markersize=3)
+    even_plot_ax.plot(folded_time_half_phase[even_cut], folded_flux[even_cut]-even_offset, '.', color='0.7',markersize=3)
+
+    both_plot_ax.plot(both_phase, trap_residual(both.params, both_phase+P_best/4.)-both_offset, color='k')
+    odd_plot_ax.plot(both_phase, trap_residual(odd.params, both_phase+P_best/4.)-odd_offset, color=color2)
+    even_plot_ax.plot(both_phase, trap_residual(even.params, both_phase+P_best/4.)-even_offset, color=color1)
+
+
+    for ax in [both_plot_ax,even_plot_ax,odd_plot_ax]:
+
+        ax.set_xlabel('$\mathregular{\Delta t_0}$')
+
+        if even.errorbars:
+
+            even_depth = even.params['a']
+            even_depth_err = even.params['a'].stderr
+            even_min_depth =  -even_depth - even_depth_err
+            even_max_depth =  -even_depth + even_depth_err
+
+            ax.axhspan(even_min_depth, even_max_depth, color=color1, alpha=0.2 )
+        if odd.errorbars:
+
+
+            odd_depth = odd.params['a']
+            odd_depth_err = odd.params['a'].stderr
+            odd_min_depth = -odd_depth - odd_depth_err
+            odd_max_depth = -odd_depth + odd_depth_err
+
+            ax.axhspan(odd_min_depth, odd_max_depth,color=color2, alpha=0.2 )
+
+        ax.axhline(-both.params['a'], color='k', ls='--')
+
+
+
+    # Sine Test    
+    sine_test_ax = fig.add_subplot(gs[2,1])
+    tran_test_ax = fig.add_subplot(gs[2,0], sharey=sine_test_ax)
+
+    sine_test_resid_ax = fig.add_subplot(gs[3,1], )
+    tran_test_resid_ax = fig.add_subplot(gs[3,0], sharey=sine_test_resid_ax)
+
+
+    test_results, sine_test_plotvals = recbin.cosine_vs_transit_global(tce_num, return_plot_values=True)
+
+    (sin_t, sin_f, sin_resid), (sin_modx, sin_mody), (tra_t, tra_f, tra_resid), (tra_modx, tra_mody) =  sine_test_plotvals
+
+
+    # Plot Sine/Transit points
+    sine_test_ax.plot(sin_t, sin_f, '.', color='0.7', markersize=3)
+    tran_test_ax.plot(tra_t, tra_f, '.', color='0.7', markersize=3)
+
+    # Plot binned Values
+    sin_t_bin, sin_f_bin = bin_flux(sin_t, sin_f, width_best/4.)
+    sine_test_ax.plot(sin_t_bin, sin_f_bin, 'o', color=color1, markeredgecolor='k')
+
+    tran_t_bin, tran_f_bin = bin_flux(tra_t, tra_f, width_best/4.)
+    tran_test_ax.plot(tran_t_bin, tran_f_bin, 'o', color=color1, markeredgecolor='k')
+
+
+    # plot models
+    sine_test_ax.plot(sin_modx, sin_mody, color=color2)
+    tran_test_ax.plot(tra_modx, tra_mody, color=color2)
+
+    tran_test_ax.set_title('Transit Fit')
+    sine_test_ax.set_title('Sine Fit')
+
+    tran_test_ax.set_ylabel('$\mathregular{\delta F / F}$')
+
+    tran_test_ax.set_xlabel('$\mathregular{\Delta t_0}$')
+    sine_test_ax.set_xlabel('$\mathregular{\Delta t_0}$')
+
+
+    #Plot Residuals
+    sine_test_resid_ax.plot(sin_t, sin_resid, '.', color='0.7', markersize=3)
+    tran_test_resid_ax.plot(tra_t, tra_resid, '.', color='0.7', markersize=3)
+
+    sine_test_resid_ax.plot(sin_modx, sin_mody*0., color=color2)
+    tran_test_resid_ax.plot(tra_modx, tra_mody*0., color=color2)
+
+    #plot binned residuals
+    sin_t_bin, sin_resid_bin = bin_flux(sin_t, sin_resid, width_best/4.)
+    sine_test_resid_ax.plot(sin_t_bin, sin_resid_bin, 'o', color=color1, markeredgecolor='k')
+
+    tran_t_bin, tran_resid_bin = bin_flux(tra_t, tra_resid, width_best/4.)
+    tran_test_resid_ax.plot(tran_t_bin, tran_resid_bin, 'o', color=color1, markeredgecolor='k')
+
+
+    tran_test_resid_ax.set_title('Transit Residual')
+    sine_test_resid_ax.set_title('Sine Residual')
+
+
+    tran_test_resid_ax.set_xlabel('$\mathregular{\Delta t_0}$')
+    sine_test_resid_ax.set_xlabel('$\mathregular{\Delta t_0}$')
+
+
+
+
+    # Weak Secondary plot
+    sec_test_ax = fig.add_subplot(gs[2,3])
+
+    sec_test_ax.plot(mesphase, mes, color='0.7')
+    sec_test_ax.plot(mesphase_sec, mes_sec, color=color1)
+    sec_test_ax.axhline(7., ls='--',)
+    sec_test_ax.axhline(0., ls='--', color='0.7')
+    sec_test_ax.axvline(0.75, ls='--', color='0.7')
+
+
+    sec_test_ax.set_title('Weak Secondary Test')
+    sec_test_ax.set_xlabel('Phase')
+    sec_test_ax.set_ylabel('MES [$\mathregular{\sigma}$]')
+
+
+    sec_test_ax.plot(vet_stats['min_sec_mes_phase'], vet_stats['min_sec_mes'], 'x', c=color2, markeredgewidth=2)
+    sec_test_ax.plot(vet_stats['max_sec_mes_phase'], vet_stats['max_sec_mes'], 'x', c=color2, markeredgewidth=2)
+
+    # Write out Test Results:
+
+    #print(vet_stats)
+
+
+    write_axis = fig.add_subplot(gs[4,:])
+
+    write_axis.axis('off')
+
+
+    keys, values = vet_stats.keys(), vet_stats.values()
+
+    results_string = ''
+
+    #print(len(keys))
+
+    n_per_col = 11
+    n_col = 4
+
+
+    thresholds={'b':0.9, 'channel_chi2_stat':5., 'temporal_chi2_stat':5., 'max_sec_mes':6., 'mes_over_mad':5.,
+               'mad_sec_mes': 3., 'mad_mes':3, 'odd_even_depth_stat':3., 'global_diff_chi2':0., 
+               'global_diff_red_chi2': 0., 'num_good_transits':recbin.dump.min_transits, 'ramp_median_bic_stat':0, 
+               'spsd_median_bic_stat':0, 'sine_median_bic_stat':0, 'sine_bic_stat':0, 'ramp_bic_stat':0,
+               'spsd_bic_stat':0, 'spsd_min_bic_stat':0, 'sine_min_bic_stat':0, 'ramp_min_bic_stat':0}
+
+    for i,k in enumerate(keys):
+
+
+        if k=='period':
+            nsig=7
+        elif k=='tce_id':
+            nsig=2
+        elif k[-4:]=='stat' or k[-4:]=='chi2' or k[-4:]=='tran':
+            nsig=2
+        else:
+            nsig=5
+
+        y_pos = i%n_per_col
+
+        if vet_stats[k] is None:
+            results_string = '\n'* int(y_pos) + k + ': {}'.format(np.nan) 
+            
+        else:
+            results_string = '\n'* int(y_pos) + k + ': {}'.format(np.round(vet_stats[k], nsig)) 
+
+        x_text=np.floor(i/n_per_col) / n_col
+        y_text=0.95
+
+        try:
+            thresh=thresholds[k]
+            stat=vet_stats[k]
+
+            if k in ['channel_chi2_stat','temporal_chi2_stat' ,'num_good_transits','mes_over_mad']:
+                thresh*=-1
+                stat*=-1
+
+            if thresh<stat or np.isnan(stat):
+                textcolor='C3'
+            else:
+                textcolor='C0'
+        except:
+            textcolor='k'
+
+
+        #if i%n_per_col==n_per_col-1:
+        write_axis.text( x_text, 0.95, results_string, transform=write_axis.transAxes, 
+                            ha='left', va='top', fontsize=8, color=textcolor)
+            #results_string=''        
+
+    #x_lineup = np.floor(i/n_per_col) / n_col
+    #write_axis.text( x_lineup, 0.9, results_string, transform=write_axis.transAxes, ha='left', va='top', fontsize=8)
+
+    if recbin.dump.lc.mission=='KEPLER':
+        cat_name='KIC'
+    elif recbin.dump.lc.mission=='TESS':
+        cat_name='TIC'
+    
+    plt.suptitle('RECYCLEBin Validation Report for '+cat_name+' {}'.format(vet_stats['tce_id']), fontsize=15)
+    
+    if savefig:
+        plt.savefig(save_directory+'/vetting_report_'+cat_name+ str(np.round(vet_stats['tce_id'],2) )+'.pdf' )
 
     
 

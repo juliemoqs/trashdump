@@ -19,7 +19,7 @@ from astropy.io import fits
     
 class LightCurve(object):
 
-    def __init__(self, time, flux, flux_err, ID, flags=None, mask=None, trend=None, mission='KEPLER', segment_dates=None, qflags=None):
+    def __init__(self, time, flux, flux_err, ID, flags=None, mask=None, trend=None, mission='KEPLER', sector_dates=None, qflags=None):
         
         self.time = time
         self.flux = flux
@@ -56,7 +56,7 @@ class LightCurve(object):
         
         self.mask &= self._make_bitmask()
 
-        self.segment_dates = segment_dates
+        self.sector_dates = sector_dates
 
         
     def mask_bad_gap_edges(self, sig=3.0, edge_cut=1., min_dif=0.2, npoints=10):

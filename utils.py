@@ -171,6 +171,8 @@ def rolling_trim_mean(x, n, percentile=0.1):
 
 
 
+    
+
 
 def running_median_insort(x, window_size):
     """Contributed by Peter Otten"""
@@ -390,7 +392,7 @@ def pad_time_series(x,y,cadence, in_mode='reflect', pad_end=False, fill_gaps=Tru
                 else:
                     y_add.extend( y_negative[range(j-n_left,j)][::-1]  )
 
-                if j+n_right > len(y):
+                if j+n_right > len(y)-1:
                     y_repeat_end = np.concatenate( [ y,y_negative[::-1] ]  )
                     y_add.extend(  y_repeat_end[range(j,j+n_right)][::-1] )
                 else:

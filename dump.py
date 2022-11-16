@@ -30,10 +30,9 @@ class Dump(object):
 
     def __init__(self, LightCurve, tdurs=None, star_logg=None, star_teff=None,
                  star_density=None, min_transits=2, P_range=None,
-                 sector_size=13., gap_size=0.5):
+                 sector_size=13., gap_size=0.5, sector_dates=None):
         
         self.lc = LightCurve
-
         
         
         if star_logg is None or star_teff is None or star_density is None:
@@ -78,6 +77,7 @@ class Dump(object):
         self.min_transits = min_transits
         self.gap_size=gap_size
         self.sector_size=sector_size
+        self.sector_dates = sector_dates
 
 
 
@@ -217,16 +217,22 @@ class Dump(object):
 
     def Calculate_SES_by_Segment(self, gap_dates=None, gap_size=None, sector_size=None, mask=None,  **calc_ses_kw):
 
+        t = self.lc.time
 
+        if not(self.sector_dates is None):
+            gap_dates=self.sector_dates
+        else:
+            if not(self.lc.sector_dates is None):
+                gap_dates=self.lc.sector_dates
+            
+            
         if gap_dates is None:
-
-        
+            
             if gap_size is None:
                 gap_size = self.gap_size
             if sector_size is None:
                 sector_size = self.sector_size
             
-            t = self.lc.time
             dt = t[1:]-t[:-1]
 
             if mask is None:
@@ -234,15 +240,24 @@ class Dump(object):
 
             # identify gaps in data larger than gap_size
             gaps = np.arange(len(dt), dtype=int)[dt>gap_size]
-            gaps = np.append(gaps, [len(t)])
+            gaps = np.append(gaps, [len(t)-1])
 
         
             # remove multiple gaps in a sector
-            segment_inds = [g for i,g in enumerate(gaps[:-1]) if gaps[i+1] - gaps[i] > sector_size ]
-            segment_inds = [0] + segment_inds + [None]
+            #segment_inds = [g for i,g in enumerate(gaps[:-1]) if t[gaps[i+1]] - t[gaps[i]] > sector_size ]
+
+            segment_inds = [0]
+            for i,g in enumerate(gaps):
+                if t[g] - t[segment_inds[-1]] > sector_size:
+                     segment_inds.append(g)
 
         else:
-            segment_inds
+            segment_inds = [np.argmin(np.abs(gd-t) ) for gd in gap_dates]
+
+        if t[segment_inds[-1]] != t[-1]:
+                segment_inds =  segment_inds + [None]
+
+        print('\nCalculating Wavelet Transform ({} Segments) ... '.format(len(segment_inds)-1))
         
         for i,seg in enumerate(segment_inds[:-1]):
 
@@ -253,6 +268,8 @@ class Dump(object):
             seg_mask = mask[seg_init:seg_end]
             seg_time = t[seg_init:seg_end][seg_mask]
             seg_flux = self.lc.flux[seg_init:seg_end][seg_mask]
+
+            #print('    Segment {}: {:.2f}-{:.2f} ({:.2f})'.format(i+1, seg_time[0], seg_time[-1], seg_time[-1]-seg_time[0]) )
 
 
             if len(seg_time)==0:
@@ -366,8 +383,8 @@ class Dump(object):
         ses_mask = np.ones(len(ses[0]), dtype=bool )
 
         
-        for s in ses:
-            ses_mask = np.logical_and(ses_mask, s<ses_cut)
+        #for s in ses:
+        #    ses_mask = np.logical_and(ses_mask, s<ses_cut)
 
         #if np.sum(~ses_mask)>150:
         #    print('Not removing {0} points with SES>{1}'.format(np.sum(~ses_mask), int(ses_cut) ) )
@@ -394,7 +411,7 @@ class Dump(object):
                 print('\nSingle Transit Candidate at t0={:.2f}\n'.format(hises_t0))
                 ses_mask &= hises_mask
 
-                single_TCE = pd.DataFrame.from_dict({'star_id':[self.lc.ID],'period':[1e10],'mes':[np.max(ses)],'t0':[hises_t0], 'tdur':[hises_tdur]})
+                single_TCE = pd.DataFrame.from_dict({'star_id':[self.lc.ID],'period':[-1],'mes':[np.max(ses)],'t0':[hises_t0], 'tdur':[hises_tdur]})
 
             
             
@@ -437,20 +454,47 @@ class Dump(object):
 
 
 
-    def Search_TCEs_FFA(self,super_sample=5, dur_range=[0.25,1.5],use_tce_mask=False,  P_range=None, **tce_search_kw,):
+    def Search_TCEs_FFA(self,super_sample=5, dur_range=[0.25,2],use_tce_mask=False, remove_hises=True, P_range=None, **tce_search_kw,):
 
         
         all_tces = pd.DataFrame({'star_id':[],'period':[],'mes':[],'t0':[],'tdur':[]})
 
 
         if use_tce_mask:
-            ses_mask = self.tce_mask.copy()
+            mask = self.tce_mask.copy()
         else:
-            ses_mask = self.lc.mask.copy()
-        ses, num, den = self.Calculate_SES_by_Segment(mask=ses_mask, fill_mode='reflect',
+            mask = self.lc.mask.copy()
+            
+        ses, num, den = self.Calculate_SES_by_Segment(mask=mask, fill_mode='reflect',
                                            tdurs=self.tdurs)
 
-        masktime = self.lc.time.copy()[ses_mask]
+        masktime = self.lc.time.copy()[mask]
+
+        ses_mask = np.ones(len(ses[0]), dtype=bool )
+
+        single_TCE=None
+
+        if remove_hises:
+            # Cut highest SES:
+            hises_ind = np.argmax(ses)%len(ses[0])
+            hises_tdur_ind =  np.argmax(ses)//len(ses[0])
+
+            hises_t0 = masktime[hises_ind]
+            hises_tdur = self.tdurs[hises_tdur_ind]
+            
+            hises_mask = make_transit_mask(time=masktime, P=-1, t0=hises_t0,
+                                           dur=hises_tdur)
+            
+
+            if np.max(ses[hises_tdur_ind][hises_mask])<0.5*np.max(ses):
+                print('\nSingle Transit Candidate at t0={:.2f}\n'.format(hises_t0))
+                ses_mask &= hises_mask
+
+                single_TCE = pd.DataFrame.from_dict({'star_id':[self.lc.ID],'period':[-1],'mes':[np.max(ses)],'t0':[hises_t0], 'tdur':[hises_tdur]})
+
+
+
+        
         
         for i_dur in range(len(self.tdurs)):
 
@@ -459,9 +503,9 @@ class Dump(object):
             
             print('Star {1}: Searching tdur = {0:.3f}'.format(dur,self.lc.ID) )
 
-            ses_i = self.ses[i_dur].copy()
-            num_i = self.num[i_dur].copy()
-            den_i = self.den[i_dur].copy()
+            ses_i = self.ses[i_dur].copy()[ses_mask]
+            num_i = self.num[i_dur].copy()[ses_mask]
+            den_i = self.den[i_dur].copy()[ses_mask]
 
             if P_range is None:
                 
@@ -471,19 +515,25 @@ class Dump(object):
                 P_min, P_max = P_range
 
             if super_sample is None:
-                mid_time, num_hist, den_hist = FFA_Search_Duration_Downsample(masktime, num_i, den_i, dur=self.lc.exptime, exptime=self.lc.exptime, super_sample=1)
-                TCEs = FFA_TCE_Search(time=mid_time, num=num_hist, den=den_hist,
-                                  cadence=self.lc.exptime, kicid=self.lc.ID,
-                                  P0_range=(P_min,P_max), dur=dur,
-                                  **tce_search_kw)
+                super_sample=1
+                dur=self.lc.exptime
 
-            else:
-                mid_time, num_hist, den_hist = FFA_Search_Duration_Downsample(masktime, num_i, den_i, dur=dur, exptime=self.lc.exptime, super_sample=super_sample)
+                
+            mid_time, num_hist, den_hist = FFA_Search_Duration_Downsample(masktime[ses_mask], num_i, den_i, dur=dur, exptime=self.lc.exptime, super_sample=super_sample)
             
-                TCEs = FFA_TCE_Search(time=mid_time, num=num_hist, den=den_hist,
+
+            TCEs = FFA_TCE_Search(time=mid_time, num=num_hist, den=den_hist,
                                   cadence=dur/super_sample, kicid=self.lc.ID,
                                   P0_range=(P_min,P_max), dur=dur,
                                   **tce_search_kw)
+
+            #else:
+            #    mid_time, num_hist, den_hist = FFA_Search_Duration_Downsample(masktime[ses_mask], num_i, den_i, dur=dur, exptime=self.lc.exptime, super_sample=super_sample)
+            
+            #    TCEs = FFA_TCE_Search(time=mid_time, num=num_hist, den=den_hist,
+            #                      cadence=dur/super_sample, kicid=self.lc.ID,
+            #                      P0_range=(P_min,P_max), dur=dur,
+            #                      **tce_search_kw)
 
 
             if len(TCEs.dropna())>0:
@@ -506,6 +556,15 @@ class Dump(object):
         #                                   tolerance=0.01)
         TCEs_checked = mask_highest_TCE_and_check_others(TCEs=all_tces.to_numpy(),
                             time=masktime, num=num, den=den, tdurs=self.tdurs)
+
+
+        if not(single_TCE is None):
+            if np.isnan(TCEs_checked).any():
+                TCEs_checked = single_TCE.to_numpy()
+            else:
+                TCEs_checked = np.append(single_TCE.to_numpy(), TCEs_checked).reshape(-1,5)
+
+                
 
         return pd.DataFrame(TCEs_checked, columns=['star_id','period','mes','t0','tdur'] )
 
@@ -533,11 +592,13 @@ class Dump(object):
 
                 print('\nTCEs after Iteration {}/{}'.format(i, niter))
                 print(pd.DataFrame(all_tces, columns=['star_id','period','mes','t0','tdur']), '\n' )
-                
+
                 for tce in all_tces:
                     new_mask = make_transit_mask(time=self.lc.time, P=tce[1],
                                                   t0=tce[3], dur=tce[4]*1.5)
                     self.tce_mask &= new_mask
+
+                
 
         if len(all_tces)==0:
             all_tces=None
@@ -755,7 +816,11 @@ class Dump(object):
 
 def make_transit_mask(time, P, t0, dur):
 
-    fold_time = (time - t0 + P/2.)%P - P/2.
+    if P<0:
+        fold_time = time-t0
+    else:
+        fold_time = (time - t0 + P/2.)%P - P/2.
+    
     mask = np.abs(fold_time) > 1.*dur
     
     return mask
@@ -1060,13 +1125,14 @@ def FFA_TCE_Search(time, num, den, cadence, dur, P0_range, kicid=99, progbar=Tru
     max_periods = []
     max_mes = []
 
-    get_Npad= lambda XX: int( XX * 2**np.ceil(np.log2(numlength/XX) )  - numlength )
+    get_Npad= lambda P, length: int( P * 2**np.ceil(np.log2(length/P) )  - length )
 
+    Pcad0 =  np.arange(P0_range[0]//cadence, np.ceil(P0_range[1]/cadence), dtype=int)
+    
     if progbar:
-        Pcad0 = np.arange(P0_range[0]//cadence, np.ceil(P0_range[1]/cadence), dtype=int)
         period_iterable = tqdm(Pcad0)
     else:
-        period_iterable = np.arange(P0_range[0]//cadence, np.ceil(P0_range[1]/cadence), dtype=int)
+        period_iterable = Pcad0
     
     
     detections = {'star_id':[], 'period':[], 'mes':[],'t0':[],'tdur':[]}
@@ -1075,7 +1141,8 @@ def FFA_TCE_Search(time, num, den, cadence, dur, P0_range, kicid=99, progbar=Tru
     
     for P0 in period_iterable:
 
-        N_pad = get_Npad(P0)
+        
+        N_pad = get_Npad(P0,numlength)
 
         num_endpad = np.pad(num_padded, (0,N_pad), mode='constant').reshape((-1, P0) )
         den_endpad = np.pad(den_padded, (0,N_pad), mode='constant').reshape((-1, P0) )
@@ -1087,11 +1154,18 @@ def FFA_TCE_Search(time, num, den, cadence, dur, P0_range, kicid=99, progbar=Tru
 
 
         if np.nanmax(mes)>threshold:
+
+            n_P, n_t0 = mes.shape
             
-            dt0 = np.arange(mes.shape[1]) * cadence + cadence/2.
+            dt0 = np.arange(0,n_t0+1) * cadence #+ cadence
+            Ps = np.arange(0,n_P+1) #* cadence
             
-            split_indices = np.arange(0,numlength+N_pad,P0)
-            Pt = (P0 + (split_indices/P0) / (len(split_indices)  ) ) * cadence
+            #split_indices = np.arange(0,numlength+N_pad,P0)
+            #Ps = 0
+
+            Pt = P0**2. / (P0 - (Ps / (n_P-1) ) ) * cadence
+            
+            #Pt = (P0 + (split_indices/P0) / (len(split_indices)  ) ) * cadence
 
             mes[np.isnan(mes)] = 0.
             
@@ -1100,7 +1174,7 @@ def FFA_TCE_Search(time, num, den, cadence, dur, P0_range, kicid=99, progbar=Tru
                         
             best_period = Pt[max_args[0]]
             best_dt0 = dt0[max_args[1]]
-            detected_mes = mes[max_args[0],:]
+            detected_mes = max_mes #mes[max_args[0],:]
 
             
             # Check TCE Vetoes
