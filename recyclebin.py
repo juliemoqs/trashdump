@@ -831,7 +831,10 @@ def odd_even_transit_depths(t,f,ferr,P,t0,width,initial_fit_method='LBFGS',
 
 
 
+def check_number_good_transits(t,f,P,t0,tdur, n_tdur, cadence=0.0204, min_frac=0.75):
 
+
+    return 1. 
 
 
 
@@ -1106,7 +1109,6 @@ def tce_masked_num_den(time, flux, t0, P, width, cadence, fill_mode='reflect', n
                                                       cadence=cadence)
 
 
-
     tce_mask = make_transit_mask(time, P, t0, width)
     
     pad_time_tce, pad_flux_tce, pad_boo_tce = pad_time_series(time[tce_mask], flux[tce_mask], in_mode=fill_mode,pad_end=True,fill_gaps=True,cadence=cadence)    
@@ -1290,21 +1292,23 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
     t_bin_zoom, f_bin_zoom = bin_flux(t=folded_time_zoom, f=folded_flux-np.median(folded_flux), dt=width_best/4.)
 
 
-
-    transit_model = recbin._get_lightcurve() - 1.
+    transit_model_time = np.arange(min(folded_time), max(folded_time), recbin.dump.lc.exptime/5. )
+    transit_model = plot_folded_transit(transit_model_time, period=P_best, t0=0., width=width_best,
+                                        depth=vet_stats['depth_ppt']/1e3, b=vet_stats['b'],
+                                        limb_dark=recbin.limb_coeff,exptime=recbin.dump.lc.exptime)-1.
 
 
 
     # Set up the plots
-    fig = plt.figure(constrained_layout=True, figsize=(12,10))
-    gs = fig.add_gridspec(5, 4)
+    fig = plt.figure(constrained_layout=True, figsize=(12,12))
+    gs = fig.add_gridspec(6, 4)
 
     #folded plot
     folded_plot_ax = fig.add_subplot(gs[0,:-1])
     folded_plot_ax.plot( folded_time, folded_flux - np.median(folded_flux), '.' , color='0.7', markersize=3)
     folded_plot_ax.plot(t_bin, f_bin, 'o', markerfacecolor=color1, markeredgewidth=1, c='k')
 
-    folded_plot_ax.plot(np.sort(folded_time), transit_model[np.argsort(folded_time)], c=color2, lw=2)
+    folded_plot_ax.plot(transit_model_time, transit_model, c=color2, lw=2)
 
 
     # Folded plot Zoomed
@@ -1312,7 +1316,7 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
 
     folded_plot_ax_zoom.plot( folded_time_zoom, folded_flux - np.median(folded_flux), '.' , color='0.7', markersize=3)
     folded_plot_ax_zoom.plot(t_bin_zoom, f_bin_zoom, 'o', markerfacecolor=color1, markeredgewidth=1, c='k')
-    folded_plot_ax_zoom.plot(np.sort(folded_time_zoom), transit_model[np.argsort(folded_time_zoom)], c=color2, lw=2)
+    folded_plot_ax_zoom.plot(transit_model_time, transit_model, c=color2, lw=2)
 
     folded_plot_ax_zoom.set_xlim(-width*2, width*2)
 
@@ -1321,15 +1325,33 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
     #folded_plot_ax.set_xlabel('$\mathregular{\Delta t_0}$')
     #folded_plot_ax_zoom.set_xlabel('$\mathregular{\Delta t_0}$')
 
-    if zoom_on_binned:
-        folded_plot_ax.set_ylim(np.nanmin(f_bin)-np.nanstd(f_bin), np.nanmax(f_bin)+np.nanstd(f_bin))
 
+
+    folded_plot_ax_crop =fig.add_subplot(gs[1,:-1])
+
+    folded_plot_ax_crop.plot( folded_time, folded_flux - np.median(folded_flux), '.' , color='0.7', markersize=3)
+    folded_plot_ax_crop.plot(t_bin, f_bin, 'o', markerfacecolor=color1, markeredgewidth=1, c='k')
+
+    folded_plot_ax_crop.plot(transit_model_time, transit_model, c=color2, lw=2)
+
+
+    # Folded plot Zoomed
+    folded_plot_ax_crop_zoom = fig.add_subplot(gs[1,-1], sharey=folded_plot_ax_crop, sharex=folded_plot_ax_zoom)
+
+    folded_plot_ax_crop_zoom.plot( folded_time_zoom, folded_flux - np.median(folded_flux), '.' , color='0.7', markersize=3)
+    folded_plot_ax_crop_zoom.plot(t_bin_zoom, f_bin_zoom, 'o', markerfacecolor=color1, markeredgewidth=1, c='k')
+    folded_plot_ax_crop_zoom.plot(transit_model_time, transit_model, c=color2, lw=2)
+
+
+    folded_plot_ax_crop.set_ylabel('$\mathregular{\delta F / F}$')
+    
+    folded_plot_ax_crop.set_ylim(np.nanmin(f_bin)-np.nanstd(f_bin), np.nanmax(f_bin)+np.nanstd(f_bin))
 
 
 
 
     # Mes plot
-    mes_plot_ax = fig.add_subplot(gs[1,:-1], )
+    mes_plot_ax = fig.add_subplot(gs[2,:-1], )
 
     mes_plot_ax.plot(mestime, mes, lw=2, color='k', label='tdur={:.2f}'.format(width), zorder=99)
     mes_plot_ax.plot(mestime, mes_min_width, lw=1, color=color1, label='tdur={:.2f}'.format(min_width_searched))
@@ -1345,7 +1367,7 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
 
 
     # Zoomed MES plot
-    mes_plot_ax_zoom = fig.add_subplot(gs[1,-1], sharey=mes_plot_ax, sharex=folded_plot_ax_zoom)
+    mes_plot_ax_zoom = fig.add_subplot(gs[2,-1], sharey=mes_plot_ax, sharex=folded_plot_ax_zoom)
 
 
     mes_plot_ax_zoom.plot(mestime, mes, lw=2, color='k', zorder=99)
@@ -1369,9 +1391,9 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
     both, even, odd, stat = recbin.odd_even_depth_test(tce_num)
 
 
-    both_plot_ax = fig.add_subplot(gs[2,2], )
-    odd_plot_ax = fig.add_subplot(gs[3,2], sharey=both_plot_ax, sharex=both_plot_ax)
-    even_plot_ax = fig.add_subplot(gs[3,3], sharey=both_plot_ax, sharex=both_plot_ax)
+    both_plot_ax = fig.add_subplot(gs[3,2], )
+    odd_plot_ax = fig.add_subplot(gs[4,2], sharey=both_plot_ax, sharex=both_plot_ax)
+    even_plot_ax = fig.add_subplot(gs[4,3], sharey=both_plot_ax, sharex=both_plot_ax)
 
     both_plot_ax.set_xlim(-width_best*2, width_best*2)
 
@@ -1434,11 +1456,11 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
 
 
     # Sine Test    
-    sine_test_ax = fig.add_subplot(gs[2,1])
-    tran_test_ax = fig.add_subplot(gs[2,0], sharey=sine_test_ax)
+    sine_test_ax = fig.add_subplot(gs[3,1])
+    tran_test_ax = fig.add_subplot(gs[3,0], sharey=sine_test_ax)
 
-    sine_test_resid_ax = fig.add_subplot(gs[3,1], )
-    tran_test_resid_ax = fig.add_subplot(gs[3,0], sharey=sine_test_resid_ax)
+    sine_test_resid_ax = fig.add_subplot(gs[4,1], )
+    tran_test_resid_ax = fig.add_subplot(gs[4,0], sharey=sine_test_resid_ax)
 
 
     test_results, sine_test_plotvals = recbin.cosine_vs_transit_global(tce_num, return_plot_values=True)
@@ -1497,7 +1519,7 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
 
 
     # Weak Secondary plot
-    sec_test_ax = fig.add_subplot(gs[2,3])
+    sec_test_ax = fig.add_subplot(gs[3,3])
 
     sec_test_ax.plot(mesphase, mes, color='0.7')
     sec_test_ax.plot(mesphase_sec, mes_sec, color=color1)
@@ -1519,7 +1541,7 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
     #print(vet_stats)
 
 
-    write_axis = fig.add_subplot(gs[4,:])
+    write_axis = fig.add_subplot(gs[5,:])
 
     write_axis.axis('off')
 
@@ -1547,7 +1569,7 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
             nsig=7
         elif k=='tce_id':
             nsig=2
-        elif k[-4:]=='stat' or k[-4:]=='chi2' or k[-4:]=='tran':
+        elif k[-4:] in ['stat','tran'] or k=='global_diff_chi2':
             nsig=2
         else:
             nsig=5
@@ -1593,6 +1615,8 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
         cat_name='TIC'
     
     plt.suptitle('RECYCLEBin Validation Report for '+cat_name+' {}'.format(vet_stats['tce_id']), fontsize=15)
+
+    #plt.tight_layout()
     
     if savefig:
         plt.savefig(save_directory+'/vetting_report_'+cat_name+ str(np.round(vet_stats['tce_id'],2) )+'.pdf' )

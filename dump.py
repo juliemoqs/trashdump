@@ -295,7 +295,7 @@ class Dump(object):
         return ses, num, den
     
 
-    def Calculate_SES(self, time=None, flux=None, mask=None, var_calc='mad',fill_mode='reflect',tdurs=None, ses_weights=None, window_width=7., tdepth=840., multi_sector=False):
+    def Calculate_SES(self, time=None, flux=None, mask=None, var_calc='mad',fill_mode='reflect',tdurs=None, ses_weights=None, window_width=7., tdepth=100., multi_sector=False):
 
         if mask is None:
             mask = self.lc.mask.copy()

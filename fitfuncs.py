@@ -27,6 +27,28 @@ def transit_residual(m,params):
 
 
 
+def plot_folded_transit(time, period,t0, width, depth, b, limb_dark, exptime):
+
+    a = 1./np.sin( (np.pi*width)/period )
+    inc = np.arccos(b/a)*(180./np.pi)  
+
+    
+    params = batman.TransitParams()
+    params.t0 = t0                       #time of inferior conjunction
+    params.per = period                    #orbital period
+    params.rp = np.sqrt(depth)                      #planet radius (in units of stellar radii)
+    params.a = a                       #semi-major axis (in units of stellar radii)
+    params.inc = inc                     #orbital inclination (in degrees)
+    params.ecc = 0.                      #eccentricity
+    params.w = 90.                       #longitude of periastron (in degrees)
+    params.u = limb_dark            #limb darkening coefficients [u1, u2]
+    params.limb_dark = "nonlinear"       #limb darkening model
+
+
+    m=batman.TransitModel(params, time, exp_time=exptime, max_err=0.1, supersample_factor = 7)
+
+    return m.light_curve(params)
+
 
 def odd_even_transit(t, *par):
 

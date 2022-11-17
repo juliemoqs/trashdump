@@ -163,7 +163,7 @@ class EleanorFFI(object):
                                               flux_err = flux_err,
                                               flags = flags, qflags=qflags,
                                               mission='TESS', ID=self.tic,
-                                              segment_dates=self.sector_dates)
+                                              sector_dates=self.sector_dates)
         
         
 
