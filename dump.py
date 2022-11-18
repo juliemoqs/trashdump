@@ -2056,16 +2056,19 @@ def mask_highest_TCE_and_check_others(TCEs, time, num, den, tdurs, threshold=7.,
 
 
 
-def check_for_minimum_transit_coverage(time, P, t0, tdur, cadence, min_transits=2, ntdur=1.5, min_frac=0.75):
+def check_for_minimum_transit_coverage(time, P, t0, tdur, cadence, min_transits=2, ntdur=1.5, min_frac=0.75, n_period_max=30):
 
     tn=t0
     n_good_transits=0
 
     if P<0:
         return False
+    if (time[-1]-time[0])/P>n_period_max:
+        return True
 
     while tn<max(time):
 
+        print(str(tn), end='\r')
         t_min, t_max = tn-ntdur * tdur, tn + ntdur*tdur
         event_cut = np.logical_and(time>t_min, time<t_max)
 
