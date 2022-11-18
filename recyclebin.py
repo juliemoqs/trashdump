@@ -843,6 +843,10 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
                         ntdur=3,texp=0.0204,show_plot=False,min_frac=0.8,
                         show_progress=True,mask_detrend=False):
 
+
+
+    if P<0:
+        P = (t[-1]-t[0])
     
     boxparams = Parameters()
     boxparams.add('a', value=depth, min=0.)
@@ -1099,8 +1103,7 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
 
 
 
-def tce_masked_num_den(time, flux, t0, P, width, cadence, fill_mode='reflect', nwindow=7):
-
+def tce_masked_num_den(time, flux, t0, P, width, cadence, fill_mode='reflect', nwindow=7, ):
 
         
     pad_time, pad_flux, pad_boo = pad_time_series(time, flux,in_mode=fill_mode,
@@ -1144,6 +1147,16 @@ def tce_masked_num_den(time, flux, t0, P, width, cadence, fill_mode='reflect', n
     D_i=np.array(D_i)[:,pad_boo]
 
     return N_i, D_i
+
+
+
+def tce_masked_num_den_sectors(time, flux, t0, P, width, cadence, fill_mode='reflect', nwindow=7, sector_dates=None):
+
+
+    return 1. 
+
+    
+    
 
 
 

@@ -493,8 +493,6 @@ class Dump(object):
                 single_TCE = pd.DataFrame.from_dict({'star_id':[self.lc.ID],'period':[-1],'mes':[np.max(ses)],'t0':[hises_t0], 'tdur':[hises_tdur]})
 
 
-
-        
         
         for i_dur in range(len(self.tdurs)):
 
@@ -598,10 +596,15 @@ class Dump(object):
                                                   t0=tce[3], dur=tce[4]*1.5)
                     self.tce_mask &= new_mask
 
-                
 
+        
         if len(all_tces)==0:
             all_tces=None
+        else:
+            all_tces = remove_tces_with_bad_transit_coverage(all_tces, self.lc.time[self.lc.mask], cadence=self.lc.exptime,
+                                                         min_transits=self.min_transits, ntdur=1.5, min_frac=0.75)
+
+        self.TCEs = all_tces
             
         return pd.DataFrame(all_tces, columns=['star_id','period','mes','t0','tdur'])
 
@@ -2050,6 +2053,46 @@ def mask_highest_TCE_and_check_others(TCEs, time, num, den, tdurs, threshold=7.,
             
     return tces_sorted[true_TCE_list]
 
+
+
+
+def check_for_minimum_transit_coverage(time, P, t0, tdur, cadence, min_transits=2, ntdur=1.5, min_frac=0.75):
+
+    tn=t0
+    n_good_transits=0
+
+    if P<0:
+        return False
+
+    while tn<max(time):
+
+        t_min, t_max = tn-ntdur * tdur, tn + ntdur*tdur
+        event_cut = np.logical_and(time>t_min, time<t_max)
+
+        tn+=P
+        
+        if sum(event_cut)<min_frac * (2*ntdur * tdur/cadence):
+            n_good_transits+=1
+
+    return n_good_transits>=min_transits
+        
+
+        
+def remove_tces_with_bad_transit_coverage(tces, time, cadence=None, min_transits=2, ntdur=2, min_frac=0.75):
+
+    if cadence is None:
+        cadence = np.nanmin(time[1:]-time[:-1])
+
+    good_tces = np.ones(len(tces), dtype=bool)
+    
+    for i,tce in enumerate(tces):
+        star, period, mes, t0, tdur = tce
+
+        good_tces[i] = check_for_minimum_transit_coverage(time, period, t0, tdur, cadence, min_transits, ntdur, min_frac)
+
+    return tces[good_tces]
+        
+        
     
         
 
