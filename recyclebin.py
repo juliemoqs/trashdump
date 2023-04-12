@@ -123,7 +123,6 @@ class RecycleBin(object):
         rp_rs = np.sqrt( 10.**logdepth )
         
         a_rs = np.sqrt( (1. + rp_rs)**2. - b**2.)/np.sin((np.pi*tdur)/per )
-
         
 
         if b/a_rs>1.:
