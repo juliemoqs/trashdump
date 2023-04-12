@@ -1071,7 +1071,7 @@ def Detrend_and_Calculate_SES_for_all_Tdur_models(lc, tdurs=np.array([1.,1.5,2,2
 
 
 
-def FFA_Search_Duration_Downsample(time, num, den, dur, exptime, super_sample=3.):    
+def FFA_Search_Duration_Downsample(time, num, den, dur, exptime, super_sample=5.):    
 
     dt =  dur/super_sample
     time_bins = np.arange(min(time), max(time)+dur/super_sample, dt)
@@ -1080,18 +1080,26 @@ def FFA_Search_Duration_Downsample(time, num, den, dur, exptime, super_sample=3.
     norm_factor = dur/(super_sample * exptime)
 
 
-    padded_time, padded_num, padded_truth = pad_time_series(time, num, in_mode='constant', cadence=exptime)
-    _, padded_den, _ = pad_time_series(time, den, in_mode='constant',cadence=exptime)
+    padded_time, padded_num, padded_truth = pad_time_series(time, num, in_mode='reflect', cadence=exptime)
+    _, padded_den, _ = pad_time_series(time, den, in_mode='reflect',cadence=exptime)
 
     if dt<exptime:
         resample_factor = int(np.ceil(exptime/dt))
         norm_factor *= resample_factor
-        padded_num, padded_time = resample(padded_num, len(padded_num)*resample_factor, t=padded_time)
-        padded_den = resample(padded_den, len(padded_den)*resample_factor)
+        padded_num_new, padded_time_new = resample(padded_num, len(padded_num)*resample_factor, t=padded_time)
+        padded_den_new = resample(padded_den, len(padded_den)*resample_factor)
+
+        padded_truth_new = np.interp(padded_time_new, padded_time, padded_truth)
+        padded_truth_new[padded_truth_new<1]=0.
             
     
-    num_hist,_ = np.histogram(padded_time, bins=time_bins, weights=padded_num/norm_factor)
-    den_hist,_ = np.histogram(padded_time, bins=time_bins, weights=padded_den/norm_factor)
+        num_hist,_ = np.histogram(padded_time_new, bins=time_bins, weights=padded_num_new*padded_truth_new/norm_factor)
+        den_hist,_ = np.histogram(padded_time_new, bins=time_bins, weights=padded_den_new*padded_truth_new/norm_factor)
+
+    else:
+        num_hist,_ = np.histogram(padded_time, bins=time_bins, weights=padded_num/norm_factor)
+        den_hist,_ = np.histogram(padded_time, bins=time_bins, weights=padded_den/norm_factor)
+        
     
 
     return mid_time, num_hist, den_hist
@@ -2003,9 +2011,9 @@ def find_best_params_for_TCE(time, num, den, tdurs, P, texp, t0, harmonics = [1.
 
 
 
-def mask_highest_TCE_and_check_others(TCEs, time, num, den, tdurs, threshold=7.,mes_norm=False,mes_frac=0.85):
+def mask_highest_TCE_and_check_others(TCEs, time, num, den, tdurs, threshold=7.,mes_norm=False,mes_frac=0.85,):
 
-    texp = np.nanmin(time[1:]-time[:-1])
+    texp = np.nanmin(np.abs(time[1:]-time[:-1]) )
     
     tces_sorted = TCEs[TCEs[:,2].argsort()][::-1]
     top_tce = tces_sorted[0]
@@ -2056,19 +2064,17 @@ def mask_highest_TCE_and_check_others(TCEs, time, num, den, tdurs, threshold=7.,
 
 
 
-def check_for_minimum_transit_coverage(time, P, t0, tdur, cadence, min_transits=2, ntdur=1.5, min_frac=0.75, n_period_max=30):
+def check_for_minimum_transit_coverage(time, P, t0, tdur, cadence, min_transits=2, ntdur=1.5, min_frac=0.8,):
 
     tn=t0
     n_good_transits=0
 
     if P<0:
         return False
-    if (time[-1]-time[0])/P>n_period_max:
-        return True
 
     while tn<max(time):
 
-        print(str(tn), end='\r')
+        #print(str(tn), end='\r')
         t_min, t_max = tn-ntdur * tdur, tn + ntdur*tdur
         event_cut = np.logical_and(time>t_min, time<t_max)
 
@@ -2076,6 +2082,9 @@ def check_for_minimum_transit_coverage(time, P, t0, tdur, cadence, min_transits=
         
         if sum(event_cut)<min_frac * (2*ntdur * tdur/cadence):
             n_good_transits+=1
+        if n_good_transits>min_transits:
+            return True
+            
 
     return n_good_transits>=min_transits
         

@@ -19,11 +19,13 @@ def get_transit_signal(width, depth=100., limb_dark=[0.4012, 0.5318, -0.2411,0.0
 
     if len(limb_dark) != 4:
         limb_dark = [0.4012, 0.5318, -0.2411, 0.0194]
+
+    rp_rs = np.sqrt(depth/1.0e6)
     
     params = batman.TransitParams()
     params.a = 20.                        
     params.t0 = 0.                        
-    params.per = np.pi*(width)/np.arcsin(1./params.a)
+    params.per = np.pi*(width)/np.arcsin( ((1+rp_rs)**2. - b**2.)/params.a)
     params.inc = np.arccos(b/params.a)*(180./np.pi)                      
     params.ecc = 0.                       
     params.w = 90.                        
@@ -37,14 +39,14 @@ def get_transit_signal(width, depth=100., limb_dark=[0.4012, 0.5318, -0.2411,0.0
 
     t = np.concatenate([(-np.arange(exp_time, n_width*width, exp_time))[::-1], np.arange(0., n_width*width, exp_time)])
     
-    params.rp = np.sqrt(depth/1.0e6)
+    params.rp =  rp_rs
+    
     m = batman.TransitModel(params, t, exp_time=exp_time, fac=0.001, supersample_factor=5)
     lc = m.light_curve(params, )
 
     if len(lc)>pad:
         print(pad, len(lc), width )
         print('What the hell? Light curve is longer than padded light curve')
-
 
     ends = np.array_split(np.ones( pad - len(lc) ), 2)
     

@@ -387,13 +387,16 @@ def pad_time_series(x,y,cadence, in_mode='reflect', pad_end=False, fill_gaps=Tru
                 y_negative = -1*y + 2.*np.median(y)
 
                 if j-n_left<0:
-                    y_repeat_begin = np.concatenate( [y_negative[::-1],y]  )
+                    #print(j, n_left, n_add, len(y))
+                    #ntimes = int((j-n_left)/(2*len(y)) )+1
+                    y_repeat_begin = np.concatenate( [y,y_negative[::-1]] )
+                    
                     y_add.extend(  y_repeat_begin[range(j+len(y)-n_left,j+len(y))][::-1] )
                 else:
                     y_add.extend( y_negative[range(j-n_left,j)][::-1]  )
 
                 if j+n_right > len(y)-1:
-                    y_repeat_end = np.concatenate( [ y,y_negative[::-1] ]  )
+                    y_repeat_end = np.concatenate( [ y,y_negative[::-1], y ]  )
                     y_add.extend(  y_repeat_end[range(j,j+n_right)][::-1] )
                 else:
                     y_add.extend(  y_negative[range(j,j+n_right)][::-1] )
