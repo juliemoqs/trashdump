@@ -138,7 +138,15 @@ class LightCurve(object):
 # Object to read in eleanor ffi light curve
 class EleanorFFI(object):
     
-    def __init__(self, fpath,lite=True):
+    def __init__(self, fpath, lite=True):
+
+        self.path=fpath
+        
+        if isinstance(fpath , str):
+            fpath=fpath
+        else:
+            fpath=fpath[0]
+            
         
         hdul=fits.open(fpath, mmap=False)
         self.lc_hdr = hdul[0].header
@@ -147,10 +155,50 @@ class EleanorFFI(object):
         
         t_i, t_f = self.lc_hdr['TSTART'], self.lc_hdr['TSTOP']
         
-        self.sector_dates = [t_i, 0.5*(t_i+t_f), t_f]
+        self.sector_dates = [t_i]
         
 
-    def get_LightCurve(self, qflags=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
+    def _get_stitched_LightCurve(self, lcfiles,  qflags=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
+                                     16,17,18,19,20]):
+
+
+        time=np.array([])
+        flux=np.array([])
+        flux_err=np.array([])
+        flags=np.array([])
+
+        sector_dates=[]
+
+        cadenceno=np.array([])
+
+        for f in lcfiles:
+
+            hdul=fits.open(f, mmap=False)
+            lc=hdul[1].data
+
+            time = np.append(time, np.array(lc['TIME']))
+            flux = np.append(flux, np.array(lc['CORR_FLUX']))
+            flux_err = np.append(flux_err, np.array(lc['FLUX_ERR']))
+            flags = np.append(flags, np.array(lc['QUALITY']))
+            cadenceno = np.append(cadenceno, np.array(lc['FFIINDEX']) )
+
+            sector_dates.append(np.array(lc['TIME'])[0])
+
+            hdul.close()
+            
+        time_sort = np.argsort(time)
+
+        transitsearch_lightcurve = LightCurve(time = time[time_sort], flux = flux[time_sort],
+                                              flux_err = flux_err[time_sort],
+                                              flags = flags[time_sort].astype(int), qflags=qflags,
+                                              mission='TESS', ID=self.tic,
+                                              sector_dates=np.sort(sector_dates) )
+
+        transitsearch_lightcurve.ffiindex = cadenceno[time_sort]
+
+        return transitsearch_lightcurve 
+    
+    def _get_single_LightCurve(self, qflags=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
                                      16,17,18,19,20] ): 
         
         lc=self.lc
@@ -169,6 +217,16 @@ class EleanorFFI(object):
 
         
         return transitsearch_lightcurve
+
+
+    def get_LightCurve(self, qflags=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
+                                     16,17,18,19,20]):
+
+        if isinstance(self.path , str):
+            return self._get_single_LightCurve(qflags=qflags)
+        else:
+            return self._get_stitched_LightCurve(lcfiles=self.path, qflags=qflags)
+
 
 
 

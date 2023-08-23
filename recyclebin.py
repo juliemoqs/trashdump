@@ -126,7 +126,8 @@ class RecycleBin(object):
         
 
         if b/a_rs>1.:
-            print('b>a_rs!!! NO!!!!!')
+            #print('b>a_rs!!! NO!!!!!')
+            return np.ones_like(self.flux)*1e20
         
         inc = np.rad2deg( np.arccos(b/a_rs) )
     
@@ -248,7 +249,7 @@ class RecycleBin(object):
 
     def weak_secondary_test(self, tce_num, mask=None):
 
-        mestime, mesphase, mes = self._calc_mes(tce_num,calc_ses=True,mask_tce=True, use_mask=True)
+        mestime, mesphase, mes = self._calc_mes(tce_num,calc_ses=True,mask_tce=True, use_mask=mask)
 
         mes[mes==0] = np.nan
         
@@ -463,12 +464,14 @@ class RecycleBin(object):
         else:
             time = self.time
             flux = self.flux
+
+        print(texp)
             
                 
         channel_red_chi2, channel_chi2_stat = channel_chi2_statistic(time, flux, t0, P, width, cadence=texp,
-                                                                     sector_dates=None)
-        temporal_red_chi2, temporal_chi2_stat = temporal_chi2_statistic(time, flux, t0, P, width , cadence=texp,
-                                                                        sector_dates=None)    
+                                                                     sector_dates=self.dump.sector_dates)
+        temporal_red_chi2, temporal_chi2_stat = temporal_chi2_statistic(time, flux, t0, P, width ,
+                                                                        cadence=texp,sector_dates=self.dump.sector_dates)    
         
         return {'channel_red_chi2':np.round(channel_red_chi2, 3),'temporal_red_chi2': np.round(temporal_red_chi2,3),'channel_chi2_stat':np.round(channel_chi2_stat,3),'temporal_chi2_stat':np.round(temporal_chi2_stat,3)}
 
@@ -1395,7 +1398,7 @@ def remove_secondary_tces(tces, threshold=3.):
 
 
 
-def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savefig=True, save_directory='.', zoom_on_binned=True, fit_method='leastsq', local_test=True):
+def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savefig=True, save_directory='.', zoom_on_binned=True, fit_method='leastsq', local_test=True, ):
     
     def bin_flux(t, f, dt):
         t_bin_edges = np.arange(min(t), max(t), dt)    
@@ -1408,13 +1411,16 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
 
     fit = recbin._update_tce(tce_num, fit_method=fit_method, return_fit=True)
 
-    vet_stats = recbin.get_all_vetting_metrics(tce_num, local_test=local_test)
+    vet_stats = recbin.get_all_vetting_metrics(tce_num, local_test=local_test, )
 
     P_best, width_best, t0_best = vet_stats['period'], vet_stats['tdur'], vet_stats['t0']
 
-
-    mestime, mesphase, mes = recbin._calc_mes(tce_num, calc_ses=True, mask_tce=False)
-    mestime_sec, mesphase_sec, mes_sec = recbin._calc_mes(tce_num, calc_ses=True, mask_tce=True)
+    other_tce_mask = recbin._get_previous_tce_masks(tce_num)
+    
+    mestime, mesphase, mes = recbin._calc_mes(tce_num, calc_ses=True, mask_tce=False,
+                                              use_mask=other_tce_mask)
+    mestime_sec, mesphase_sec, mes_sec = recbin._calc_mes(tce_num, calc_ses=True, mask_tce=True,
+                                                          use_mask=other_tce_mask)
 
     min_width_searched = min(recbin.dump.tdurs)
     max_width_searched = max(recbin.dump.tdurs)
@@ -1423,11 +1429,13 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
     _, _, mes_max_width = recbin._calc_mes(tce_num, calc_ses=True, mask_tce=False,width=max_width_searched)
 
 
+    full_mask = other_tce_mask
+    full_mask &= recbin.dump.lc.mask
 
-    folded_time = (recbin.dump.lc.time[recbin.dump.lc.mask]-t0_best + P_best/4.)%P_best - P_best/4.
-    folded_flux = recbin.dump.lc.flux[recbin.dump.lc.mask]
+    folded_time = (recbin.dump.lc.time[full_mask]-t0_best + P_best/4.)%P_best - P_best/4.
+    folded_flux = recbin.dump.lc.flux[full_mask]
 
-    folded_time_zoom = (recbin.dump.lc.time[recbin.dump.lc.mask]-t0_best + P_best/2.)%P_best - P_best/2.
+    folded_time_zoom = (recbin.dump.lc.time[full_mask]-t0_best + P_best/2.)%P_best - P_best/2.
 
     t_bin, f_bin = bin_flux(t=folded_time, f=folded_flux - np.median(folded_flux), dt=width_best/4.)
     t_bin_zoom, f_bin_zoom = bin_flux(t=folded_time_zoom, f=folded_flux - np.median(folded_flux), dt=width_best/4.)
@@ -1554,13 +1562,13 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
 
     #both_plot_ax.set_ylabel('$\mathregular{\delta F / F}$')
 
-    folded_time_oddeven_cuts = (recbin.dump.lc.time[recbin.dump.lc.mask]-t0_best + P_best/2.)%(2*P_best) 
+    folded_time_oddeven_cuts = (recbin.dump.lc.time[full_mask]-t0_best + P_best/2.)%(2*P_best) 
 
     odd_cut = folded_time_oddeven_cuts<=P_best
     even_cut = folded_time_oddeven_cuts>P_best
 
 
-    folded_time_half_phase = (recbin.dump.lc.time[recbin.dump.lc.mask]-t0_best + P_best/2.)%P_best - P_best/2.
+    folded_time_half_phase = (recbin.dump.lc.time[full_mask]-t0_best + P_best/2.)%P_best - P_best/2.
 
     both_phase = np.sort(folded_time_half_phase)
     odd_phase = both_phase[odd_cut]
