@@ -414,6 +414,8 @@ def pad_time_series(x,y,cadence, in_mode='reflect', pad_end=False, fill_gaps=Tru
     
     if pad_end:
 
+        #print(len_pad is None)
+
         if len_pad is None:
             padded_len = int(2**np.ceil(np.log2(len(padded_x)) )  )
             if padded_len-len(padded_x)<10:
@@ -421,15 +423,19 @@ def pad_time_series(x,y,cadence, in_mode='reflect', pad_end=False, fill_gaps=Tru
         else:
             padded_len = len_pad
 
-        
         total2add = padded_len-len(padded_x)
-        add_right =  int(total2add/2)
+        add_right =  int(np.floor(total2add/2))
+        add_left = int(np.ceil(total2add/2))
+
+        if total2add==0:
+            return padded_x, padded_y, truth_array
 
 
-        if total2add%2==1:
-            add_left = int(total2add/2) + 1
-        else:
-            add_left = int(total2add/2)
+
+        #if total2add%2==1:
+        #    add_left = int(total2add/2) + 1
+        #else:
+        #    add_left = int(total2add/2)
 
         x_add_right = padded_x[-1] + np.arange(1, add_right+1)*cadence
         x_add_left =  padded_x[0] - np.arange(1, add_left+1)[::-1]*cadence

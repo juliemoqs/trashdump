@@ -1193,11 +1193,24 @@ def tce_masked_num_den(time, flux, t0, P, width, cadence, fill_mode='reflect', n
                                                       cadence=cadence)
 
 
-    tce_mask = make_transit_mask(time, P, t0, width)
-    
-    pad_time_tce, pad_flux_tce, pad_boo_tce = pad_time_series(time[tce_mask], flux[tce_mask], in_mode=fill_mode,pad_end=True,fill_gaps=True,cadence=cadence)
+    tce_mask = make_transit_mask(pad_time, P, t0, width)
 
+    if sum(tce_mask)==len(tce_mask):
+        pad_time_tce = pad_time.copy()
+        pad_flux_tce = pad_flux.copy()
+        pad_boo_tce = pad_boo.copy()
+        
+    else:
     
+        pad_time_tce, pad_flux_tce, pad_boo_tce = pad_time_series(pad_time[tce_mask], pad_flux[tce_mask], in_mode=fill_mode,pad_end=True,fill_gaps=True,cadence=cadence, len_pad=len(pad_time))
+
+    #print(len(pad_time), len(pad_flux_tce), sum(tce_mask), len(tce_mask), len(time))
+
+
+
+    #pad_time_tce, pad_flux_tce, pad_boo_tce = pad_time_series(fill_time_tce, fill_flux_tce, in_mode=fill_mode,pad_end=True,fill_gaps=False,cadence=cadence)
+    
+        
     
     template = get_transit_signal(width=width, depth=100., pad=len(pad_flux), b=0.2)
     
@@ -1282,7 +1295,7 @@ def tce_masked_num_den_sectors(time, flux, t0, P, width, cadence, fill_mode='ref
 def temporal_chi2_statistic(t, flux, t0, P, width , cadence, fill_mode='reflect', nwindow=7., sector_dates=None):    
     
     foldtime = (t-t0 + P/2.)%P - P/2.
-    t0_mask = np.abs(foldtime)<=cadence/2.
+    t0_mask = np.abs(foldtime)<=cadence
     n_transits = np.sum(t0_mask)
 
     try:
@@ -1334,7 +1347,7 @@ def channel_chi2_statistic(time, flux, t0, P, width, cadence, fill_mode='reflect
     
     
     foldtime = (time-t0 + P/2.)%P - P/2.
-    t0_mask = np.abs(foldtime)<cadence/2.
+    t0_mask = np.abs(foldtime)<cadence
     n_transits = np.sum(t0_mask)
     
     Z = np.sum(N[t0_mask])/np.sqrt(np.sum(D[t0_mask]) )
