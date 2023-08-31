@@ -1201,13 +1201,18 @@ def tce_masked_num_den(time, flux, t0, P, width, cadence, fill_mode='reflect', n
         pad_boo_tce = pad_boo.copy()
         
     else:
-    
-        pad_time_tce, pad_flux_tce, pad_boo_tce = pad_time_series(pad_time[tce_mask], pad_flux[tce_mask], in_mode=fill_mode,pad_end=True,fill_gaps=True,cadence=cadence, len_pad=len(pad_time))
+
+        pad_flux_tce = np.interp(pad_time, pad_time[tce_mask], pad_flux[tce_mask] )
+
+        
+        #pad_time_tce, pad_flux_tce, pad_boo_tce = pad_time_series(pad_time[tce_mask], pad_flux[tce_mask], in_mode=fill_mode,pad_end=True, fill_gaps=True, cadence=cadence, len_pad=len(pad_time))
 
     #print(len(pad_time), len(pad_flux_tce), sum(tce_mask), len(tce_mask), len(time))
 
 
 
+    #print(len(pad_flux_tce), len(pad_time))
+    
     #pad_time_tce, pad_flux_tce, pad_boo_tce = pad_time_series(fill_time_tce, fill_flux_tce, in_mode=fill_mode,pad_end=True,fill_gaps=False,cadence=cadence)
     
         
