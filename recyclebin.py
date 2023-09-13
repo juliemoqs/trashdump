@@ -893,7 +893,7 @@ def odd_even_transit_depths(t,f,ferr,P,t0,width,initial_fit_method='LBFGS',
 
 
 
-def check_number_good_transits(t, f, P, t0, tdur, n_tdur=1, cadence=0.0204, min_frac=0.5, min_transits=3):
+def check_number_good_transits(t, f, P, t0, tdur, n_tdur=1, cadence=0.0204, min_frac=0.5, min_transits=4):
 
     tn=t0
     n_good_transits=0
