@@ -458,14 +458,14 @@ class RecycleBin(object):
 
 
         if not(use_mask is None):
-            
+            #use_mask &= self.dump.lc.mask
             time = self.time[use_mask]
             flux = self.flux[use_mask]
         else:
-            time = self.time
-            flux = self.flux
+            time = self.dump.lc.time[self.dump.lc.mask]
+            flux = self.dump.lc.flux[self.dump.lc.mask]
 
-        print(texp)
+        #print(texp)
             
                 
         channel_red_chi2, channel_chi2_stat = channel_chi2_statistic(time, flux, t0, P, width, cadence=texp,
@@ -500,7 +500,7 @@ class RecycleBin(object):
         if local_test:
             result_list =[{'tce_id':tce_id,'period':P, 'depth_ppt':depth*1e3,'tdur':width,'t0':t0, 'b':b} ,
                      self._get_mes_metrics(tce_num, use_mask=previous_tce_mask),
-                     self.chi2_tests(tce_num, use_mask=other_tce_mask),
+                     self.chi2_tests(tce_num, use_mask=None),
                      self.weak_secondary_test(tce_num, mask=previous_tce_mask),
                      #self.odd_even_mes_test(tce_num),
                      self.odd_even_depth_test(tce_num, True),
@@ -1764,7 +1764,7 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
     n_col = 4
 
 
-    thresholds={'b':0.9, 'channel_chi2_stat':5., 'temporal_chi2_stat':5., 'max_sec_mes':6., 'mes_over_mad':5.,
+    thresholds={'b':0.9, 'channel_chi2_stat':10., 'temporal_chi2_stat':6., 'max_sec_mes':6., 'mes_over_mad':5.,
                'mad_sec_mes': 3., 'mad_mes':3, 'odd_even_depth_stat':3., 'global_diff_chi2':0., 
                'global_diff_red_chi2': 0., 'num_good_transits':recbin.dump.min_transits, 'ramp_median_bic_stat':0, 
                'spsd_median_bic_stat':0, 'sine_median_bic_stat':0, 'sine_bic_stat':0, 'ramp_bic_stat':0,
@@ -1821,6 +1821,8 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
         cat_name='KIC'
     elif recbin.dump.lc.mission=='TESS':
         cat_name='TIC'
+    else:
+        cat_name='CANDIDATE'
     
     plt.suptitle('RECYCLEBin Validation Report for '+cat_name+' {}'.format(vet_stats['tce_id']), fontsize=15)
 
