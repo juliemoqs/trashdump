@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]  # 61+ supports PEP 621 metadata
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trashdump"
+version = "0.1.0"
+description = "A collection of Python utilities for transit data analysis"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Robert F. Wilson", email = "robertfwilson@example.com" }
+]
+requires-python = ">=3.8"
+
+dependencies = [
+  "numpy",
+  "scipy",
+  "matplotlib",
+  "pywavelets"
+]
+
+[project.urls]
+Homepage = "https://github.com/robertfwilson/trashdump"
+Issues = "https://github.com/robertfwilson/trashdump/issues"
+
+[project.scripts]
+trashdump = "trashdump.trashdump_script:main"

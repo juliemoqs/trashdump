@@ -1,0 +1,2 @@
+[console_scripts]
+trashdump = trashdump.trashdump_script:main

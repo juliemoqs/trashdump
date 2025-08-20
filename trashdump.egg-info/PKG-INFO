@@ -1,0 +1,20 @@
+Metadata-Version: 2.4
+Name: trashdump
+Version: 0.1.0
+Summary: A collection of Python utilities for transit data analysis
+Home-page: https://github.com/robertfwilson/trashdump
+Author: Robby Wilson
+Author-email: "Robert F. Wilson" <robertfwilson@example.com>
+Project-URL: Homepage, https://github.com/robertfwilson/trashdump
+Project-URL: Issues, https://github.com/robertfwilson/trashdump/issues
+Requires-Python: >=3.6
+Description-Content-Type: text/markdown
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: matplotlib
+Requires-Dist: pywavelets
+Dynamic: author
+Dynamic: home-page
+Dynamic: requires-python
+
+# TraSH-DUMP

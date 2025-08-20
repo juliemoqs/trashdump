@@ -1744,6 +1744,13 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
     sec_test_ax.plot(vet_stats['min_sec_mes_phase']-0.25, vet_stats['min_sec_mes'], 'x', c=color2, markeredgewidth=2)
     sec_test_ax.plot(vet_stats['max_sec_mes_phase']-0.25, vet_stats['max_sec_mes'], 'x', c=color2, markeredgewidth=2)
 
+
+    sec_test_ymax = np.nanmax(mes_sec) + np.nanstd(mes_sec)
+    sec_test_ymin = np.nanmin(mes_sec) - np.nanstd(mes_sec)
+
+    sec_test_ax.set_ylim(sec_test_ymin, max(sec_test_ymax,10. ) )
+
+    
     # Write out Test Results:
 
     #print(vet_stats)
