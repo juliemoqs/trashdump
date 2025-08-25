@@ -110,7 +110,7 @@ class TransitFitter(object):
         if err is None:
             return data-model_flux
         
-        return (data-model_flux) / err**2.
+        return (data-model_flux)**2. / err**2.
     
 
     
@@ -145,9 +145,6 @@ class TransitFitter(object):
                         method=fit_method)
 
         return out
-
-
-
 
 
 

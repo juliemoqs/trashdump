@@ -140,9 +140,9 @@ class RecycleBin(object):
         lc = self._get_lightcurve()
 
         if robust:
-            resids = (self.flux-lc)**2. / self.flux_err**2.
+            resids = (self.flux-lc) / self.flux_err**2.
         else:
-            resids = (self.flux-lc)**2. / self.flux_err**2.
+            resids = (self.flux-lc) / self.flux_err**2.
             
         if any(np.isnan(resids)):
             print(inc, a_rs, rp_rs)
@@ -881,11 +881,10 @@ def odd_even_transit_depths(t,f,ferr,P,t0,width,initial_fit_method='LBFGS',
     even_flux = f[even]
     even_phase = phase[even]-P
     
-
     
     bothparams = Parameters()
     bothparams.add('t0', value=0.25*P, vary=True,min=0.2*P,max=0.3*P)
-    bothparams.add('a', value=1e-3, vary=True, min=1e-8, max=.99)
+    bothparams.add('a', value=1e-3, vary=True, min=1e-6, max=.99)
     bothparams.add('b', value=1e3, vary=True, min=100, max=1e4)
     bothparams.add('tdur', value=width, min=0.2 * width, max=5*width, vary=True)
     bothparams.add('c0', value=1., vary=True,)
@@ -895,7 +894,7 @@ def odd_even_transit_depths(t,f,ferr,P,t0,width,initial_fit_method='LBFGS',
     
 
     initresult = minimize(trap_residual, bothparams,
-                          args=(phase%P, f, ferr), method=initial_fit_method, )
+                          args=(phase%P, f, ferr), method=initial_fit_method, reduce_fcn='neglogcauchy')
 
     bothresult =  minimize(trap_residual, initresult.params,
                            args=(phase%P, f, ferr),method=fit_method, reduce_fcn='neglogcauchy')

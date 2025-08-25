@@ -23,7 +23,6 @@ def transit_residual(m,params):
     params.a =  a
     params.inc = inc
 
-    
     return m
 
 
@@ -85,7 +84,7 @@ def phase_folded_transit(t, *par):
 
 def jump(t, *par):
     a, b, t0 = par
-    return a * expit(-b*(t-t0))
+    return a * expit(b*(t-t0))
     #return a/(1. + np.exp(-b*(t-t0)))
 
 def spsd(t, *par):
@@ -180,7 +179,7 @@ def spsd_residual(pars, x, data=None, err=None):
         return model
     if err is None:
         return data-model
-    return (data-model) / err**2.
+    return (data-model) / err
 
 
 
@@ -198,7 +197,7 @@ def box_residual(pars, x, data=None, err=None):
         return model
     if err is None:
         return data-model
-    return (data-model) / err**2.
+    return (data-model) / err
 
 
 
@@ -219,4 +218,4 @@ def trap_residual(pars, x, data=None, err=None):
         return model
     if err is None:
         return data-model
-    return (data-model) / err**2.    
+    return (data-model) / err  
