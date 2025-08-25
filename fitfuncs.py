@@ -5,6 +5,7 @@ import numpy as np
 
 import batman
 import warnings
+from scipy.special import expit
 
 from .utils import *
 
@@ -84,7 +85,8 @@ def phase_folded_transit(t, *par):
 
 def jump(t, *par):
     a, b, t0 = par
-    return a/(1. + np.exp(-b*(t-t0)))
+    return a * expit(-b*(t-t0))
+    #return a/(1. + np.exp(-b*(t-t0)))
 
 def spsd(t, *par):
     a,b,t0,d,tdur = par

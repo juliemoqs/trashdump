@@ -107,7 +107,7 @@ class RecycleBin(object):
             return self.batman_model.light_curve(params)
 
 
-    def _transit_resids(self, par):
+    def _transit_resids(self, par, robust=False):
 
         try:
             vals = par.valuesdict()
@@ -139,7 +139,11 @@ class RecycleBin(object):
 
         lc = self._get_lightcurve()
 
-        resids = (self.flux-lc) / self.flux_err**2.
+        if robust:
+            resids = (self.flux-lc)**2. / self.flux_err**2.
+        else:
+            resids = (self.flux-lc)**2. / self.flux_err**2.
+            
         if any(np.isnan(resids)):
             print(inc, a_rs, rp_rs)
             print('NaN in Transit Modelling')
@@ -149,7 +153,7 @@ class RecycleBin(object):
         
     
 
-    def _update_tce(self, tce_num, fit_method='leastsq', return_fit=False):
+    def _update_tce(self, tce_num, fit_method='leastsq', return_fit=False, robust=False):
 
 
         P,width,t0 = get_p_tdur_t0(self.tces[tce_num])        
@@ -162,6 +166,7 @@ class RecycleBin(object):
             params.add('per', value=max(self.time)-min(self.time), vary=False,)
         else:
             params.add('per', value=P, vary=True, min=.99*P, max=1.01*P)
+            
         params.add('t0', value=t0, vary=True, min=t0-2*width, max=t0+2*width)
         params.add('tdur', value=width, min=0.25 * width, max=min(2*width,P/2), vary=True)
         params.add('b', value=0.1, min=0., max=1., vary=True)
@@ -191,6 +196,7 @@ class RecycleBin(object):
         if return_fit:
             return out
 
+
         
     def _calc_mes(self, tce_num, mask_tce=False, calc_ses=False, use_mask=None,
                   width=None):
@@ -218,9 +224,12 @@ class RecycleBin(object):
         
         mestime, mes = calc_mes(foldtime[mask],num,den,P,texp=self.dump.lc.exptime,n_trans=1., return_nans=True)
 
-        return mestime-P/4., (mestime)/P , mes
+
+        return mestime-P/4., (mestime/P) , mes
 
 
+
+    
     def _get_odd_even_mes(self, tce_num, ):
 
         P,width,t0 = get_p_tdur_t0(self.tces[tce_num])
@@ -246,6 +255,15 @@ class RecycleBin(object):
 
         return odd_time, odd_mes, even_time, even_mes, mad(odd_mes), mad(even_mes)
 
+    def robust_depth_test(self, tce_num, mask=None):
+
+
+        
+
+        
+
+        return 1. 
+
 
     def weak_secondary_test(self, tce_num, mask=None):
 
@@ -254,9 +272,9 @@ class RecycleBin(object):
         mes[mes==0] = np.nan
         
         max_secondary_mes = np.nanmax(mes)
-        max_secondary_phase = mesphase[np.nanargmax(mes)]
+        max_secondary_phase = mesphase[np.nanargmax(mes)]-0.25
         min_secondary_mes = np.nanmin(mes)
-        min_secondary_phase = mesphase[np.nanargmin(mes)]
+        min_secondary_phase = mesphase[np.nanargmin(mes)]-0.25
         mad_secondary_mes = mad(mes)
         
 
@@ -479,6 +497,8 @@ class RecycleBin(object):
     def get_preliminary_vetting_metrics(self, tce_num):
         
         bestfit = self._update_tce(tce_num, return_fit=True)
+
+        return 1. 
 
 
         
@@ -1183,6 +1203,9 @@ def bic_morphology_test(t, f, ferr, P, t0, tdur, depth=1e-4, fit_method='LBFGS',
 
 
 
+    
+
+
 
 def tce_masked_num_den(time, flux, t0, P, width, cadence, fill_mode='reflect', nwindow=7., n_channels=16):
 
@@ -1252,7 +1275,6 @@ def tce_masked_num_den(time, flux, t0, P, width, cadence, fill_mode='reflect', n
 
 
 def tce_masked_num_den_sectors(time, flux, t0, P, width, cadence, fill_mode='reflect', nwindow=7, sector_dates=None):
-
 
 
     if sector_dates is None:
@@ -1467,11 +1489,25 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
 
 
     # Set up the plots
-    fig = plt.figure(constrained_layout=True, figsize=(12,12))
-    gs = fig.add_gridspec(6, 4)
+    fig = plt.figure(constrained_layout=True, figsize=(12,14))
+    gs = fig.add_gridspec(7, 4)
+
+    # Full Light Cuve Plot
+    full_plot_ax = fig.add_subplot(gs[0,:])
+    
+    full_plot_ax.plot( recbin.dump.lc.time[full_mask], recbin.dump.lc.flux[full_mask]-np.nanmedian(recbin.dump.lc.flux[full_mask]), '.' , color='0.7', markersize=2,  rasterized=True)
+
+
+    tce_mask = ~make_transit_mask( time=recbin.dump.lc.time[full_mask], P=P_best, t0=t0_best, dur=width_best )
+
+    full_plot_ax.plot( recbin.dump.lc.time[full_mask][tce_mask], recbin.dump.lc.flux[full_mask][tce_mask]-np.nanmedian(recbin.dump.lc.flux[full_mask]), '.' , color=color1, markersize=4,  rasterized=True, label='In-Transit Points')
+    full_plot_ax.set_xlabel('Time')
+    full_plot_ax.set_ylabel('$\\mathregular{\\delta F/F}$')
+    full_plot_ax.legend(loc='upper left', labelcolor='k')
+
 
     #folded plot
-    folded_plot_ax = fig.add_subplot(gs[0,:-1])
+    folded_plot_ax = fig.add_subplot(gs[1,:-1])
     folded_plot_ax.plot( folded_time, folded_flux - np.median(folded_flux), '.' , color='0.7', markersize=3,  rasterized=True)
     folded_plot_ax.plot(t_bin, f_bin, 'o', markerfacecolor=color1, markeredgewidth=1, c='k')
 
@@ -1479,7 +1515,7 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
 
 
     # Folded plot Zoomed
-    folded_plot_ax_zoom = fig.add_subplot(gs[0,-1], sharey=folded_plot_ax)
+    folded_plot_ax_zoom = fig.add_subplot(gs[1,-1], sharey=folded_plot_ax)
 
     folded_plot_ax_zoom.plot( folded_time_zoom, folded_flux - np.median(folded_flux), '.' , color='0.7', markersize=3,  rasterized=True)
     folded_plot_ax_zoom.plot(t_bin_zoom, f_bin_zoom, 'o', markerfacecolor=color1, markeredgewidth=1, c='k')
@@ -1494,7 +1530,7 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
 
 
 
-    folded_plot_ax_crop =fig.add_subplot(gs[1,:-1])
+    folded_plot_ax_crop =fig.add_subplot(gs[2,:-1])
 
     folded_plot_ax_crop.plot( folded_time, folded_flux - np.median(folded_flux), '.' , color='0.7', markersize=3,  rasterized=True, zorder=-9)
     folded_plot_ax_crop.plot(t_bin, f_bin, 'o', markerfacecolor=color1, markeredgewidth=1, c='k')
@@ -1503,7 +1539,7 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
 
 
     # Folded plot Zoomed
-    folded_plot_ax_crop_zoom = fig.add_subplot(gs[1,-1], sharey=folded_plot_ax_crop, sharex=folded_plot_ax_zoom)
+    folded_plot_ax_crop_zoom = fig.add_subplot(gs[2,-1], sharey=folded_plot_ax_crop, sharex=folded_plot_ax_zoom)
 
     folded_plot_ax_crop_zoom.plot( folded_time_zoom, folded_flux - np.median(folded_flux), '.' , color='0.7', markersize=3, rasterized=True, zorder=-9)
     folded_plot_ax_crop_zoom.plot(t_bin_zoom, f_bin_zoom, 'o', markerfacecolor=color1, markeredgewidth=1, c='k')
@@ -1519,10 +1555,8 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
     folded_plot_ax_crop.set_ylim(np.nanmin(f_bin)-2*np.nanstd(f_bin), np.nanmax(f_bin)+np.nanstd(f_bin))
 
 
-
-
     # Mes plot
-    mes_plot_ax = fig.add_subplot(gs[2,:-1], )
+    mes_plot_ax = fig.add_subplot(gs[3,:-1], )
 
     mes_plot_ax.plot(mestime, mes, lw=2, color='k', label='tdur={:.2f}'.format(width), zorder=99)
     mes_plot_ax.plot(mestime, mes_min_width, lw=1, color=color1, label='tdur={:.2f}'.format(min_width_searched))
@@ -1538,7 +1572,7 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
 
 
     # Zoomed MES plot
-    mes_plot_ax_zoom = fig.add_subplot(gs[2,-1], sharey=mes_plot_ax, sharex=folded_plot_ax_zoom)
+    mes_plot_ax_zoom = fig.add_subplot(gs[3,-1], sharey=mes_plot_ax, sharex=folded_plot_ax_zoom)
 
 
     mes_plot_ax_zoom.plot(mestime, mes, lw=2, color='k', zorder=99)
@@ -1563,9 +1597,9 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
     both, even, odd, stat = recbin.odd_even_depth_test(tce_num)
 
 
-    both_plot_ax = fig.add_subplot(gs[3,2], )
-    odd_plot_ax = fig.add_subplot(gs[4,2], sharey=both_plot_ax, sharex=both_plot_ax)
-    even_plot_ax = fig.add_subplot(gs[4,3], sharey=both_plot_ax, sharex=both_plot_ax)
+    both_plot_ax = fig.add_subplot(gs[4,2], )
+    odd_plot_ax = fig.add_subplot(gs[5,2], sharey=both_plot_ax, sharex=both_plot_ax)
+    even_plot_ax = fig.add_subplot(gs[5,3], sharey=both_plot_ax, sharex=both_plot_ax)
 
     both_plot_ax.set_xlim(-width_best*2, width_best*2)
 
@@ -1650,11 +1684,11 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
 
 
     # Sine Test    
-    sine_test_ax = fig.add_subplot(gs[3,1])
-    tran_test_ax = fig.add_subplot(gs[3,0], sharey=sine_test_ax)
+    sine_test_ax = fig.add_subplot(gs[4,1])
+    tran_test_ax = fig.add_subplot(gs[4,0], sharey=sine_test_ax)
 
-    sine_test_resid_ax = fig.add_subplot(gs[4,1], )
-    tran_test_resid_ax = fig.add_subplot(gs[4,0], sharey=sine_test_resid_ax)
+    sine_test_resid_ax = fig.add_subplot(gs[5,1], )
+    tran_test_resid_ax = fig.add_subplot(gs[5,0], sharey=sine_test_resid_ax)
 
 
     test_results, sine_test_plotvals = recbin.cosine_vs_transit_global(tce_num, return_plot_values=True)
@@ -1723,7 +1757,7 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
 
 
     # Weak Secondary plot
-    sec_test_ax = fig.add_subplot(gs[3,3])
+    sec_test_ax = fig.add_subplot(gs[4,3])
 
     #mesphase = (mesphase-0.25)%1
     #mesphase_sec = (mesphase_sec-0.25)%1
@@ -1741,8 +1775,8 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
     sec_test_ax.set_ylabel('MES')
 
 
-    sec_test_ax.plot(vet_stats['min_sec_mes_phase']-0.25, vet_stats['min_sec_mes'], 'x', c=color2, markeredgewidth=2)
-    sec_test_ax.plot(vet_stats['max_sec_mes_phase']-0.25, vet_stats['max_sec_mes'], 'x', c=color2, markeredgewidth=2)
+    sec_test_ax.plot(vet_stats['min_sec_mes_phase'], vet_stats['min_sec_mes'], 'x', c=color2, markeredgewidth=2)
+    sec_test_ax.plot(vet_stats['max_sec_mes_phase'], vet_stats['max_sec_mes'], 'x', c=color2, markeredgewidth=2)
 
 
     sec_test_ymax = np.nanmax(mes_sec) + np.nanstd(mes_sec)
@@ -1755,8 +1789,7 @@ def make_data_validation_report(tce_num, recbin, color1='C0', color2='C3', savef
 
     #print(vet_stats)
 
-
-    write_axis = fig.add_subplot(gs[5,:])
+    write_axis = fig.add_subplot(gs[6,:])
 
     write_axis.axis('off')
 
