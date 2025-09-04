@@ -10,6 +10,8 @@ from scipy.interpolate import griddata
 from astroquery.mast import Catalogs
 from fast_histogram import histogram1d
 
+from astroquery.simbad import Simbad
+
 import warnings
 
 from .ffa import *
@@ -108,7 +110,7 @@ class Dump(object):
         starid = self.lc.ID
 
 
-        if mission not in ['Kepler', 'K2', 'TESS']:
+        if mission not in ['KEPLER', 'K2', 'TESS']:
             warnings.warn(f'Cannot determine stellar parameters for star in '
                           f'mission {self.mission}. Using solar values.')
             self.star_mass = 1.
