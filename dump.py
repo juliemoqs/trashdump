@@ -104,13 +104,13 @@ class Dump(object):
         -------
         """
 
-        mission = self.lc.mission
+        mission = self.lc.mission.upper()
         starid = self.lc.ID
 
 
-        if mission not in ['Kepler', 'K2', 'TESS']:
+        if mission.upper() not in ['KEPLER', 'K2', 'TESS']:
             warnings.warn(f'Cannot determine stellar parameters for star in '
-                          f'mission {self.mission}. Using solar values.')
+                          f'mission {self.lc.mission}. Using solar values.')
             self.star_mass = 1.
             self.star_radius = 1.
             self.star_teff = 5772.
